@@ -1,0 +1,16 @@
+name: "Build package"
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    - uses: cachix/install-nix-action@v20
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+    - run: nix build
