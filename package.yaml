@@ -1,0 +1,24 @@
+dependencies:
+  - base
+  - aeson
+  - amazonka >= 2.0
+  - amazonka-core >= 2.0
+  - amazonka-cloudwatch-logs >= 2.0
+  - bytestring
+  - containers
+  - exceptions
+  - fmt
+  - formatting >= 7.2.0
+  - lens
+  - lens-aeson
+  - neat-interpolation
+  - optparse-applicative
+  - retry
+  - split
+  - text
+  - time
+  - xdg-basedir
+
+executables:
+  ciqt:
+    main: src/Main.hs
