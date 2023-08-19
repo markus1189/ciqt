@@ -147,7 +147,7 @@ main = do
         [ padRightF @Text 14 ' ' "Query Start: " +| dateDashF (utcToZonedTime tz queryStart) |+ "T" +| hmsF (utcToZonedTime tz queryStart) |+ tzF (utcToZonedTime tz queryStart),
           padRightF @Text 14 ' ' "Query End: " +| dateDashF (utcToZonedTime tz queryEnd) |+ "T" +| hmsF (utcToZonedTime tz queryEnd) |+ tzF (utcToZonedTime tz queryEnd),
           padRightF @Text 14 ' ' "Duration: " +| Text.pack (formatTime defaultTimeLocale "%d days, %H hours, %M minutes, %S seconds" $ diffUTCTime queryEnd queryStart) |+ "",
-          padRightF @Text 14 ' ' "Limit: " +| maybe "<no-limit-specified>" show limit |+ "",
+          padRightF @Text 14 ' ' "Limit: " +| maybe "<no-limit-specified>" (commaizeF . fromIntegral @Natural @Integer) limit |+ "",
           padRightF @Text 14 ' ' "LogGroups: " +| unwordsF (appArgs ^. appArgsLogGroups) |+ "",
           padRightF @Text 14 ' ' "Query:" +| "\n" +| query |+ "",
           "---------------------------"
