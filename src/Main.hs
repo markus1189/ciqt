@@ -1,9 +1,10 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -fdefer-type-errors #-}
 
 import Amazonka (trying)
@@ -18,7 +19,7 @@ import Amazonka.CloudWatchLogs.Types (QueryStatistics (QueryStatistics'), Result
 import Amazonka.Prelude (mapMaybe)
 import Control.Applicative ((<|>))
 import Control.Lens (view, (%~))
-import Control.Lens.Operators ((&), (.~), (?~), (^.))
+import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
 import Control.Monad (unless)
 import Control.Monad.Catch (bracket)
@@ -44,7 +45,7 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatParseM)
 import Data.Traversable (for)
-import Fmt (commaizeF, dateDashF, hmsF, listF, padLeftF, padRightF, tzF, (+|), (|+), unwordsF, build)
+import Fmt (build, commaizeF, dateDashF, hmsF, listF, padLeftF, padRightF, tzF, unwordsF, (+|), (|+), indentF)
 import Formatting (sformat, (%), (%.))
 import Formatting.Combinators qualified as Formatters
 import Formatting.Formatters qualified as Formatters
@@ -81,15 +82,18 @@ TODOs
 
 -}
 
-data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelative CalendarDiffTime
+data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelative CalendarDiffTime deriving (Show)
+
+data Limit = ExplicitLimit Natural | MaxLimit deriving (Eq, Show)
 
 data AppArgs = AppArgs
   { _appArgsQuery :: Text,
-    _appArgsLimit :: Maybe Natural,
+    _appArgsLimit :: Maybe Limit,
     _appArgsTimeRange :: TimeRange,
     _appArgsLogGroups :: NonEmpty Text,
     _appArgsDryRun :: Bool
   }
+  deriving (Show)
 
 makeLenses ''AppArgs
 
@@ -103,7 +107,7 @@ appArgsParser =
           <> showDefault
           <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
       )
-    <*> optional (option auto (long "limit" <> metavar "POSINT"))
+    <*> optional (ExplicitLimit <$> option auto (long "limit" <> metavar "POSINT") <|> MaxLimit <$ switch (long "limit-max" <> help "Use max limit for results from AWS"))
     <*> (timeRangeAbsolute <|> timeRangeRelative)
     <*> option (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ",")) (long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search")
     <*> switch (long "dry-run" <> help "Print arguments and query, but don't start it")
@@ -134,7 +138,10 @@ main = do
       (queryStart, queryEnd) = case appArgs ^. appArgsTimeRange of
         TimeRangeAbsolute s e -> (zonedTimeToUTC s, maybe now zonedTimeToUTC e)
         TimeRangeRelative d -> (addUTCTime (negate . fromInteger @NominalDiffTime . read $ formatTime defaultTimeLocale "%s" d) now, now)
-      limit = appArgs ^. appArgsLimit
+      limit =
+        appArgs ^. appArgsLimit <&> \case
+          MaxLimit -> 10000
+          ExplicitLimit x -> x
 
       query = appArgs ^. appArgsQuery
 
@@ -146,10 +153,10 @@ main = do
         "\n"
         [ padRightF @Text 14 ' ' "Query Start: " +| dateDashF (utcToZonedTime tz queryStart) |+ "T" +| hmsF (utcToZonedTime tz queryStart) |+ tzF (utcToZonedTime tz queryStart),
           padRightF @Text 14 ' ' "Query End: " +| dateDashF (utcToZonedTime tz queryEnd) |+ "T" +| hmsF (utcToZonedTime tz queryEnd) |+ tzF (utcToZonedTime tz queryEnd),
-          padRightF @Text 14 ' ' "Duration: " +| Text.pack (formatTime defaultTimeLocale "%d days, %H hours, %M minutes, %S seconds" $ diffUTCTime queryEnd queryStart) |+ "",
+          padRightF @Text 14 ' ' "Interval: " +| Text.pack (formatTime defaultTimeLocale "%d days, %H hours, %M minutes, %S seconds" $ diffUTCTime queryEnd queryStart) |+ "",
           padRightF @Text 14 ' ' "Limit: " +| maybe "<no-limit-specified>" (commaizeF . fromIntegral @Natural @Integer) limit |+ "",
           padRightF @Text 14 ' ' "LogGroups: " +| unwordsF (appArgs ^. appArgsLogGroups) |+ "",
-          padRightF @Text 14 ' ' "Query:" +| "\n" +| query |+ "",
+          "Query:\n\n" +| indentF 2 (build query),
           "---------------------------"
         ]
     )
