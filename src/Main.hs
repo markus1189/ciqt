@@ -74,14 +74,6 @@ import Options.Applicative
 import System.IO (hFlush, stderr, stdout)
 import System.IO qualified as IO
 
-{-
-
-TODOs
-- output to file / stdout?
-- better logging
-
--}
-
 data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelative CalendarDiffTime deriving (Show)
 
 data Limit = ExplicitLimit Natural | MaxLimit deriving (Eq, Show)
