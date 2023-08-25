@@ -21,9 +21,10 @@ import Control.Applicative ((<|>))
 import Control.Lens (view, (%~))
 import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
-import Control.Monad (unless)
-import Control.Monad.Catch (bracket)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad (unless, when)
+import Control.Monad.Catch (SomeException (SomeException), bracket, try)
+import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.Trans.Resource (MonadResource, ResourceT)
 import Control.Retry (constantDelay, limitRetriesByCumulativeDelay, retrying)
 import Data.Aeson (Value)
 import Data.Aeson qualified as Aeson
@@ -40,12 +41,12 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TIO
-import Data.Time (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime, formatTime, getCurrentTime, getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffTime, NominalDiffTime, TimeZone, UTCTime, ZonedTime, addUTCTime, diffUTCTime, formatTime, getCurrentTime, getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatParseM)
 import Data.Traversable (for)
-import Fmt (build, commaizeF, dateDashF, hmsF, listF, padLeftF, padRightF, tzF, unwordsF, (+|), (|+), indentF)
+import Fmt (build, commaizeF, dateDashF, hmsF, indentF, listF, padLeftF, padRightF, tzF, unwordsF, (+|), (|+))
 import Formatting (sformat, (%), (%.))
 import Formatting.Combinators qualified as Formatters
 import Formatting.Formatters qualified as Formatters
@@ -71,15 +72,19 @@ import Options.Applicative
     value,
     (<**>),
   )
-import System.IO (hFlush, stderr, stdout)
+import System.Exit (exitFailure, exitSuccess)
+import System.IO (Handle, hFlush, stderr, stdout)
 import System.IO qualified as IO
+import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
 
 data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelative CalendarDiffTime deriving (Show)
 
 data Limit = ExplicitLimit Natural | MaxLimit deriving (Eq, Show)
 
+data QueryArg = QueryFile FilePath | QueryString Text deriving (Eq, Show)
+
 data AppArgs = AppArgs
-  { _appArgsQuery :: Text,
+  { _appArgsQuery :: QueryArg,
     _appArgsLimit :: Maybe Limit,
     _appArgsTimeRange :: TimeRange,
     _appArgsLogGroups :: NonEmpty Text,
@@ -92,82 +97,109 @@ makeLenses ''AppArgs
 appArgsParser :: Parser AppArgs
 appArgsParser =
   AppArgs
-    <$> strOption
-      ( long "query"
-          <> metavar "QUERY"
-          <> help "Cloudwatch query to execute"
-          <> showDefault
-          <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
-      )
-    <*> optional (ExplicitLimit <$> option auto (long "limit" <> metavar "POSINT") <|> MaxLimit <$ switch (long "limit-max" <> help "Use max limit for results from AWS"))
+    <$> (queryFileParser <|> queryStringParser)
+    <*> limitParser
     <*> (timeRangeAbsolute <|> timeRangeRelative)
-    <*> option (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ",")) (long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search")
+    <*> logGroupsParser
     <*> switch (long "dry-run" <> help "Print arguments and query, but don't start it")
   where
     timeRangeAbsolute =
       TimeRangeAbsolute
         <$> option (maybeReader (formatParseM iso8601Format)) (long "start" <> metavar "TIME")
         <*> optional (option (maybeReader (formatParseM iso8601Format)) (long "end" <> metavar "TIME"))
-    timeRangeRelative = TimeRangeRelative <$> option (maybeReader (formatParseM iso8601Format)) (long "since" <> metavar "ISO8601_DURATION")
+
+    timeRangeRelative =
+      TimeRangeRelative
+        <$> option (maybeReader (formatParseM iso8601Format)) (long "since" <> metavar "ISO8601_DURATION")
+
+    queryFileParser =
+      QueryFile
+        <$> strOption
+          ( long "query-file"
+              <> metavar "FILE"
+              <> help "Path to a file with a cloudwatch insights query"
+          )
+
+    queryStringParser =
+      QueryString
+        <$> strOption
+          ( long "query"
+              <> metavar "QUERY"
+              <> help "Cloudwatch query to execute"
+              <> showDefault
+              <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
+          )
+    limitParser =
+      optional
+        ( ExplicitLimit
+            <$> option auto (long "limit" <> metavar "POSINT")
+            <|> MaxLimit <$ switch (long "limit-max" <> help "Use max limit for results from AWS")
+        )
+    logGroupsParser =
+      option
+        (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ","))
+        ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search"
+        )
+
+fastLoggerToAwsLogger :: FastLogger -> AWS.Logger
+fastLoggerToAwsLogger fastLogger lvl bss = when (lvl <= AWS.Error) $ fastLogger (toLogStr bss)
 
 main :: IO ()
 main = do
-  let opts = info (appArgsParser <**> helper) (fullDesc <> progDesc "Execute cloudwatch logs insight queries")
+  result <- try @_ @SomeException $ mainProgram
+  case result of
+    Left e -> exitFailure
+    Right () -> exitSuccess
+
+mainProgram :: IO ()
+mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
+  let opts = info (appArgsParser <**> helper) (fullDesc <> progDesc "Execute cloudwatch insights log queries")
   appArgs <- execParser opts
-  logger <- AWS.newLogger AWS.Error IO.stdout
 
   tz <- getCurrentTimeZone
-
   discoveredEnv <- AWS.newEnv AWS.discover
-
   now <- liftIO getCurrentTime
 
-  let env =
-        discoveredEnv
-          { AWS.logger = logger,
-            AWS.region = AWS.Frankfurt
-          }
-      (queryStart, queryEnd) = case appArgs ^. appArgsTimeRange of
-        TimeRangeAbsolute s e -> (zonedTimeToUTC s, maybe now zonedTimeToUTC e)
-        TimeRangeRelative d -> (addUTCTime (negate . fromInteger @NominalDiffTime . read $ formatTime defaultTimeLocale "%s" d) now, now)
-      limit =
-        appArgs ^. appArgsLimit <&> \case
-          MaxLimit -> 10000
-          ExplicitLimit x -> x
+  let env = discoveredEnv {AWS.logger = fastLoggerToAwsLogger fastLogger, AWS.region = AWS.Frankfurt}
+      (queryStart, queryEnd) = calculateQueryStartEnd now appArgs
+      limit = calculateLimit appArgs
 
-      query = appArgs ^. appArgsQuery
+  query <- calculateQuery appArgs
 
-      errorsQuery = buildQuery limit (appArgs ^. appArgsLogGroups) queryStart queryEnd query
+  let awsQuery = buildQuery limit (appArgs ^. appArgsLogGroups) queryStart queryEnd query
 
-  TIO.hPutStrLn
-    stderr
-    ( Text.intercalate
-        "\n"
-        [ padRightF @Text 14 ' ' "Query Start: " +| dateDashF (utcToZonedTime tz queryStart) |+ "T" +| hmsF (utcToZonedTime tz queryStart) |+ tzF (utcToZonedTime tz queryStart),
-          padRightF @Text 14 ' ' "Query End: " +| dateDashF (utcToZonedTime tz queryEnd) |+ "T" +| hmsF (utcToZonedTime tz queryEnd) |+ tzF (utcToZonedTime tz queryEnd),
-          padRightF @Text 14 ' ' "Interval: " +| Text.pack (formatTime defaultTimeLocale "%d days, %H hours, %M minutes, %S seconds" $ diffUTCTime queryEnd queryStart) |+ "",
-          padRightF @Text 14 ' ' "Limit: " +| maybe "<no-limit-specified>" (commaizeF . fromIntegral @Natural @Integer) limit |+ "",
-          padRightF @Text 14 ' ' "LogGroups: " +| unwordsF (appArgs ^. appArgsLogGroups) |+ "",
-          "Query:\n\n" +| indentF 2 (build query),
-          "---------------------------"
-        ]
-    )
-  unless (appArgs ^. appArgsDryRun) $ AWS.runResourceT $ do
-    mresult <- executeQuery env errorsQuery
+  printPreFlightInfo tz (queryStart, queryEnd) (appArgs ^. appArgsLogGroups) limit query
+
+  unless (appArgs ^. appArgsDryRun) . AWS.runResourceT $ do
     liftIO $ TIO.hPutStrLn stderr "---------------------------"
+    mresult <- executeQuery env awsQuery
     for_ mresult $ \result -> do
       let mlogEvents = result ^. getQueryResultsResponse_results
           stats = result ^. getQueryResultsResponse_statistics
-      for_ mlogEvents $ \logEvents -> do
-        for_ logEvents $ \logEvent -> do
-          let logEvent' = resultFieldsToJson logEvent & key "@message" %~ parseNestedJson
-          liftIO . LBS.hPutStrLn stdout . Aeson.encode $ logEvent'
+      for_ mlogEvents $ \logEvents -> for_ logEvents $ \logEvent -> do
+        let logEvent' = resultFieldsToJson logEvent & key "@message" %~ parseNestedJson
+        liftIO . LBS.hPutStrLn stdout . Aeson.encode $ logEvent'
 
       liftIO $ do
         hFlush stdout
         TIO.hPutStrLn stderr $ "---------------------------\nStatistics:\n" +| fmap formatQueryStats stats |+ "\n---------------------------"
 
-  hFlush stdout >> hFlush stderr
+calculateQueryStartEnd :: UTCTime -> AppArgs -> (UTCTime, UTCTime)
+calculateQueryStartEnd now appArgs =
+  case appArgs ^. appArgsTimeRange of
+    TimeRangeAbsolute s e -> (zonedTimeToUTC s, maybe now zonedTimeToUTC e)
+    TimeRangeRelative d -> (addUTCTime (negate . fromInteger @NominalDiffTime . read $ formatTime defaultTimeLocale "%s" d) now, now)
+
+calculateLimit :: AppArgs -> Maybe Natural
+calculateLimit appArgs =
+  appArgs ^. appArgsLimit <&> \case
+    MaxLimit -> 10000
+    ExplicitLimit x -> x
+
+calculateQuery :: AppArgs -> IO Text
+calculateQuery appArgs = case appArgs ^. appArgsQuery of
+  QueryString q -> pure q
+  QueryFile f -> TIO.readFile f
 
 buildQuery :: Maybe Natural -> NonEmpty Text -> UTCTime -> UTCTime -> Text -> Logs.StartQuery
 buildQuery n lgs qstart qend q =
@@ -187,25 +219,30 @@ resultFieldsToJson rfs = Aeson.toJSON $ Map.fromList $ mapMaybe resultFieldToJso
 resultFieldToJson :: ResultField -> Maybe (Text, Text)
 resultFieldToJson rf = (,) <$> view resultField_field rf <*> view resultField_value rf
 
-executeQuery env query = do
-  bracket
-    (AWS.send env query)
-    ( \x -> do
-        let qid = x ^. startQueryResponse_queryId
-        case qid of
-          Nothing -> pure ()
-          Just queryId -> do
-            queryStatus <- view getQueryResultsResponse_status <$> AWS.send env (Logs.newGetQueryResults queryId)
-            case queryStatus of
-              Just QueryStatus_Running -> do
-                liftIO $ TIO.hPutStrLn stderr [trimming|Stopping query: $queryId|]
-                r <- trying AWS._ServiceError $ AWS.send env (newStopQuery queryId)
-                case r of
-                  Left _ -> liftIO $ TIO.hPutStrLn stderr [trimming|Failed stopping query: $queryId|]
-                  Right _ -> liftIO $ TIO.hPutStrLn stderr [trimming|Suceeded stopping query: $queryId|]
-              _ -> pure ()
-    )
-    $ \res -> do
+executeQuery :: AWS.Env -> Logs.StartQuery -> ResourceT IO (Maybe Logs.GetQueryResultsResponse)
+executeQuery env query = bracket acquire release act
+  where
+    acquire :: ResourceT IO Logs.StartQueryResponse
+    acquire = AWS.send env query
+
+    release :: Logs.StartQueryResponse -> ResourceT IO ()
+    release startQueryResponse = do
+      let qid = startQueryResponse ^. startQueryResponse_queryId
+      case qid of
+        Nothing -> pure ()
+        Just queryId -> do
+          queryStatus <- view getQueryResultsResponse_status <$> AWS.send env (Logs.newGetQueryResults queryId)
+          case queryStatus of
+            Just QueryStatus_Running -> do
+              liftIO $ TIO.hPutStrLn stderr [trimming|Stopping query: $queryId|]
+              r <- trying AWS._ServiceError $ AWS.send env (newStopQuery queryId)
+              case r of
+                Left _ -> liftIO $ TIO.hPutStrLn stderr [trimming|Failed stopping query: $queryId|]
+                Right _ -> liftIO $ TIO.hPutStrLn stderr [trimming|Suceeded stopping query: $queryId|]
+            _ -> pure ()
+
+    act :: (MonadResource m, MonadIO m) => Logs.StartQueryResponse -> m (Maybe Logs.GetQueryResultsResponse)
+    act res = do
       let queryId = res ^. startQueryResponse_queryId
 
       for queryId $ \qid -> do
@@ -234,3 +271,19 @@ formatQueryStats QueryStatistics' {recordsScanned = scanned, bytesScanned = byte
       "Records scanned: " +| padLeftF 13 ' ' (commaizeF @Integer . round <$> scanned),
       sformat ("Bytes Scanned: " % (Formatters.left 13 ' ' %. Formatters.maybed "" (Formatters.bytes (Formatters.fixed 2)))) (fmap round bytesS)
     ]
+
+printPreFlightInfo :: TimeZone -> (UTCTime, UTCTime) -> NonEmpty Text -> Maybe Natural -> Text -> IO ()
+printPreFlightInfo tz (queryStart, queryEnd) logGroups limit query = do
+  TIO.hPutStrLn
+    stderr
+    ( Text.intercalate
+        "\n"
+        [ padRightF @Text 14 ' ' "Query Start: " +| dateDashF (utcToZonedTime tz queryStart) |+ "T" +| hmsF (utcToZonedTime tz queryStart) |+ tzF (utcToZonedTime tz queryStart),
+          padRightF @Text 14 ' ' "Query End: " +| dateDashF (utcToZonedTime tz queryEnd) |+ "T" +| hmsF (utcToZonedTime tz queryEnd) |+ tzF (utcToZonedTime tz queryEnd),
+          padRightF @Text 14 ' ' "Interval: " +| Text.pack (formatTime defaultTimeLocale "%d days, %H hours, %M minutes, %S seconds" $ diffUTCTime queryEnd queryStart) |+ "",
+          padRightF @Text 14 ' ' "Limit: " +| maybe "<no-limit-specified>" (commaizeF . fromIntegral @Natural @Integer) limit |+ "",
+          padRightF @Text 14 ' ' "LogGroups: " +| unwordsF logGroups |+ "",
+          "Query:\n\n" +| indentF 2 (build query),
+          "---------------------------"
+        ]
+    )
