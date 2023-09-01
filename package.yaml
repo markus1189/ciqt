@@ -7,7 +7,9 @@ dependencies:
   - bytestring
   - containers
   - exceptions
+  - either
   - fast-logger >= 3.2
+  - FailT
   - fmt
   - formatting >= 7.2.0
   - Glob
@@ -15,6 +17,7 @@ dependencies:
   - lens-aeson
   - neat-interpolation
   - optparse-applicative
+  - regex-pcre
   - retry
   - resourcet
   - split

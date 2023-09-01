@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -12,7 +13,7 @@ import Amazonka qualified as AWS
 import Amazonka.CloudWatchLogs (QueryStatus (..))
 import Amazonka.CloudWatchLogs qualified as Logs
 import Amazonka.CloudWatchLogs.GetQueryResults (getQueryResultsResponse_results, getQueryResultsResponse_statistics)
-import Amazonka.CloudWatchLogs.Lens (describeLogGroupsResponse_logGroups, describeLogGroups_logGroupNamePattern, getQueryResultsResponse_status, logGroup_logGroupName, resultField_field, resultField_value, startQueryResponse_queryId, startQuery_limit, describeLogGroups_logGroupNamePrefix, describeLogGroups_nextToken, describeLogGroupsResponse_nextToken)
+import Amazonka.CloudWatchLogs.Lens (describeLogGroupsResponse_logGroups, describeLogGroupsResponse_nextToken, describeLogGroups_logGroupNamePattern, describeLogGroups_logGroupNamePrefix, describeLogGroups_nextToken, getQueryResultsResponse_status, logGroup_logGroupName, resultField_field, resultField_value, startQueryResponse_queryId, startQuery_limit)
 import Amazonka.CloudWatchLogs.StartQuery (startQuery_logGroupNames)
 import Amazonka.CloudWatchLogs.StopQuery (newStopQuery)
 import Amazonka.CloudWatchLogs.Types (QueryStatistics (QueryStatistics'), ResultField, bytesScanned, recordsMatched, recordsScanned)
@@ -22,17 +23,19 @@ import Control.Lens (view, (%~))
 import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
 import Control.Monad (unless, when)
-import Control.Monad.Catch (MonadCatch, bracket, try, SomeException)
+import Control.Monad.Catch (MonadCatch, SomeException, bracket, try)
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.Trans.Fail (FailT, runFailT)
 import Control.Monad.Trans.Resource (MonadResource, ResourceT)
-import System.FilePath.Glob qualified as Glob
 import Control.Retry (constantDelay, limitRetriesByCumulativeDelay, retrying)
 import Data.Aeson (Value)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Lens (key)
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy.Char8 qualified as LBS
+import Data.Either.Combinators (mapLeft)
 import Data.Foldable (for_)
+import Data.Functor.Identity (Identity, runIdentity)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.List.Split (splitOn)
@@ -56,6 +59,7 @@ import Numeric.Natural (Natural)
 import Options.Applicative
   ( Parser,
     auto,
+    eitherReader,
     execParser,
     fullDesc,
     help,
@@ -74,11 +78,25 @@ import Options.Applicative
     (<**>),
   )
 import System.Exit (exitFailure, exitSuccess)
+import System.FilePath.Glob (Pattern, compDefault, tryCompileWith)
+import System.FilePath.Glob qualified as Glob
 import System.IO (hFlush, stderr, stdout)
 import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
-import System.FilePath.Glob (Pattern)
+import Text.Regex.PCRE (Regex, RegexContext (match), RegexMaker (makeRegexM))
 
-data LogGroupsArg = CommaLogGroups (NonEmpty Text) | LogNamePattern Text | LogNamePrefix Text | LogNameGlob String deriving (Show, Eq)
+data LogGroupsArg
+  = CommaLogGroups (NonEmpty Text)
+  | LogNamePattern Text
+  | LogNamePrefix Text
+  | LogNameGlob Pattern
+  | LogNameRegex (Text, Regex)
+
+instance Show LogGroupsArg where
+  show (CommaLogGroups lgs) = "CommaLogGroups " +| show lgs |+ ""
+  show (LogNamePattern p) = "LogNamePattern " +| show p |+ ""
+  show (LogNamePrefix s) = "LogNamePrefix " +| show s |+ ""
+  show (LogNameGlob g) = "LogNameGlob " +| show g |+ ""
+  show (LogNameRegex (r, _)) = "LogNameRegex " +| show r |+ ""
 
 data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelative CalendarDiffTime deriving (Show)
 
@@ -139,28 +157,29 @@ appArgsParser =
             <|> MaxLimit <$ switch (long "limit-max" <> help "Use max limit for results from AWS")
         )
     logGroupsParser =
-      ( CommaLogGroups
+      CommaLogGroups
+        <$> option
+          (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ","))
+          ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search"
+          )
+        <|> LogNamePattern
+          <$> strOption
+            ( long "log-group-pattern" <> metavar "LOG_GROUP_PATTERN" <> help "Match log groups based on case-sensitive substring search"
+            )
+        <|> LogNamePrefix
+          <$> strOption
+            ( long "log-group-prefix" <> metavar "LOG_GROUP_PREFIX" <> help "Match log groups based on case-sensitive prefix search"
+            )
+        <|> LogNameGlob
           <$> option
-            (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ","))
-            ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search"
+            (eitherReader (\t -> mapLeft (\err -> "Could not compile glob: " +| t |+ ". Error was: " +| err |+ "") . tryCompileWith compDefault $ t))
+            ( long "log-group-glob" <> metavar "LOG_GROUP_GLOB" <> help "Retrieve ALL LOG GROUPS (!) and then match via glob pattern"
             )
-      )
-        <|> ( LogNamePattern
-                <$> strOption
-                  ( long "log-group-pattern" <> metavar "LOG_GROUP_PATTERN" <> help "Match log groups based on case-sensitive substring search"
-                  )
+        <|> LogNameRegex
+          <$> option
+            (eitherReader (\t -> fmap (Text.pack t,) . mapLeft (\err -> "Could not parse regex: " +| t |+ ". Error was: " +| err |+ "") . runIdentity . runFailT . makeRegexM @Regex @_ @_ @_ @(FailT String Identity) $ t))
+            ( long "log-group-regex" <> metavar "LOG_GROUP_REGEX" <> help "Retrieve ALL LOG GROUPS (!) and then match via PCRE regex"
             )
-      <|> ( LogNamePrefix
-                <$> strOption
-                  ( long "log-group-prefix" <> metavar "LOG_GROUP_PREFIX" <> help "Match log groups based on case-sensitive prefix search"
-                  )
-            )
-      <|> ( LogNameGlob
-                <$> strOption
-                  ( long "log-group-glob" <> metavar "LOG_GROUP_GLOB" <> help "Retrieve ALL LOG GROUPS (!) and then match via glob pattern"
-                  )
-            )
-
 
 fastLoggerToAwsLogger :: FastLogger -> AWS.Logger
 fastLoggerToAwsLogger fastLogger lvl bss = when (lvl <= AWS.Error) $ fastLogger (toLogStr bss)
@@ -169,8 +188,7 @@ main :: IO ()
 main = do
   result <- try @_ @SomeException $ mainProgram
   case result of
-    Left _ -> do
-      exitFailure
+    Left _ -> exitFailure
     Right () -> exitSuccess
 
 discoverAwsEnv :: (MonadIO m, MonadCatch m) => FastLogger -> m AWS.Env
@@ -190,9 +208,10 @@ mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
   maybeLgs <- calculateLogGroups env (appArgs ^. appArgsLogGroups)
   lgs <- case maybeLgs of
     Nothing -> do
-      fastLogger $ toLogStr $ "Could not find any log groups from " <> Text.pack (show (appArgs ^. appArgsLogGroups))
+      fastLogger . toLogStr @Text $ "Could not find any log groups from " +| show (appArgs ^. appArgsLogGroups) |+ ""
       exitFailure
-    Just lgs -> pure lgs
+    Just lgs ->
+      pure lgs
 
   let (queryStart, queryEnd) = calculateQueryStartEnd now appArgs
       limit = calculateLimit appArgs
@@ -229,7 +248,11 @@ calculateLogGroups env (LogNamePrefix s) = AWS.runResourceT $ do
   pure . (=<<) NonEmpty.nonEmpty . fmap (mapMaybe (view logGroup_logGroupName)) $ res ^. describeLogGroupsResponse_logGroups
 calculateLogGroups env (LogNameGlob patternString) = AWS.runResourceT $ do
   lgs <- describeAllLogGroups env Nothing
-  pure $ NonEmpty.nonEmpty . mapMaybe (view logGroup_logGroupName) $ filter (globLogGroupName (Glob.compile patternString)) lgs
+  pure $ NonEmpty.nonEmpty . mapMaybe (view logGroup_logGroupName) $ filter (globLogGroupName patternString) lgs
+calculateLogGroups env (LogNameRegex (_, regex)) = AWS.runResourceT $ do
+  lgs <- describeAllLogGroups env Nothing
+  let filtered = filter (\lg -> maybe False (match regex . Text.unpack) (lg ^. logGroup_logGroupName)) lgs
+  pure $ NonEmpty.nonEmpty . mapMaybe (view logGroup_logGroupName) $ filtered
 
 calculateQueryStartEnd :: UTCTime -> AppArgs -> (UTCTime, UTCTime)
 calculateQueryStartEnd now appArgs =
@@ -320,7 +343,7 @@ formatQueryStats QueryStatistics' {recordsScanned = scanned, bytesScanned = byte
     ]
 
 printPreFlightInfo :: AWS.Env -> TimeZone -> (UTCTime, UTCTime) -> NonEmpty Text -> Maybe Natural -> Text -> IO ()
-printPreFlightInfo awsEnv tz (queryStart, queryEnd) logGroups limit query = do
+printPreFlightInfo awsEnv tz (queryStart, queryEnd) logGroups limit query =
   TIO.hPutStrLn
     stderr
     ( Text.intercalate
@@ -336,7 +359,7 @@ printPreFlightInfo awsEnv tz (queryStart, queryEnd) logGroups limit query = do
         ]
     )
 
-describeAllLogGroups :: MonadResource m => AWS.Env -> Maybe Text -> m [Logs.LogGroup]
+describeAllLogGroups :: (MonadResource m) => AWS.Env -> Maybe Text -> m [Logs.LogGroup]
 describeAllLogGroups env nextToken = do
   let query = Logs.newDescribeLogGroups & describeLogGroups_nextToken .~ nextToken
   res <- AWS.send env query
