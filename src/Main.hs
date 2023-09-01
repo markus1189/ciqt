@@ -16,19 +16,20 @@ import Amazonka.CloudWatchLogs.Lens (getQueryResultsResponse_status, resultField
 import Amazonka.CloudWatchLogs.StartQuery (startQuery_logGroupNames)
 import Amazonka.CloudWatchLogs.StopQuery (newStopQuery)
 import Amazonka.CloudWatchLogs.Types (QueryStatistics (QueryStatistics'), ResultField, bytesScanned, recordsMatched, recordsScanned)
-import Amazonka.Prelude (mapMaybe)
+import Amazonka.Prelude (Identity (runIdentity), mapMaybe)
 import Control.Applicative ((<|>))
 import Control.Lens (view, (%~))
 import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
 import Control.Monad (unless, when)
-import Control.Monad.Catch (SomeException (SomeException), bracket, try, MonadCatch)
+import Control.Monad.Catch (MonadCatch, SomeException (SomeException), bracket, try)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Resource (MonadResource, ResourceT)
 import Control.Retry (constantDelay, limitRetriesByCumulativeDelay, retrying)
 import Data.Aeson (Value)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Lens (key)
+import Data.ByteString (toStrict)
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Foldable (for_)
@@ -76,7 +77,6 @@ import System.Exit (exitFailure, exitSuccess)
 import System.IO (Handle, hFlush, stderr, stdout)
 import System.IO qualified as IO
 import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
-import Data.Functor.Identity (Identity)
 
 data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelative CalendarDiffTime deriving (Show)
 
@@ -152,7 +152,7 @@ main = do
     Left e -> exitFailure
     Right () -> exitSuccess
 
-discoverAwsEnv :: (MonadIO m, MonadCatch m) => FastLogger -> m (AWS.Env' Identity)
+discoverAwsEnv :: (MonadIO m, MonadCatch m) => FastLogger -> m AWS.Env
 discoverAwsEnv logger = do
   env <- AWS.newEnv AWS.discover
   pure $ env {AWS.logger = fastLoggerToAwsLogger logger}
@@ -174,7 +174,7 @@ mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
 
   let awsQuery = buildQuery limit (appArgs ^. appArgsLogGroups) queryStart queryEnd query
 
-  printPreFlightInfo tz (queryStart, queryEnd) (appArgs ^. appArgsLogGroups) limit query
+  printPreFlightInfo env tz (queryStart, queryEnd) (appArgs ^. appArgsLogGroups) limit query
 
   unless (appArgs ^. appArgsDryRun) . AWS.runResourceT $ do
     liftIO $ TIO.hPutStrLn stderr "---------------------------"
@@ -278,13 +278,14 @@ formatQueryStats QueryStatistics' {recordsScanned = scanned, bytesScanned = byte
       sformat ("Bytes Scanned: " % (Formatters.left 13 ' ' %. Formatters.maybed "" (Formatters.bytes (Formatters.fixed 2)))) (fmap round bytesS)
     ]
 
-printPreFlightInfo :: TimeZone -> (UTCTime, UTCTime) -> NonEmpty Text -> Maybe Natural -> Text -> IO ()
-printPreFlightInfo tz (queryStart, queryEnd) logGroups limit query = do
+printPreFlightInfo :: AWS.Env -> TimeZone -> (UTCTime, UTCTime) -> NonEmpty Text -> Maybe Natural -> Text -> IO ()
+printPreFlightInfo awsEnv tz (queryStart, queryEnd) logGroups limit query = do
   TIO.hPutStrLn
     stderr
     ( Text.intercalate
         "\n"
-        [ padRightF @Text 14 ' ' "Query Start: " +| dateDashF (utcToZonedTime tz queryStart) |+ "T" +| hmsF (utcToZonedTime tz queryStart) |+ tzF (utcToZonedTime tz queryStart),
+        [ padRightF @Text 14 ' ' "AWS Region: " +| AWS.fromRegion (AWS.region awsEnv) |+ "",
+          padRightF @Text 14 ' ' "Query Start: " +| dateDashF (utcToZonedTime tz queryStart) |+ "T" +| hmsF (utcToZonedTime tz queryStart) |+ tzF (utcToZonedTime tz queryStart),
           padRightF @Text 14 ' ' "Query End: " +| dateDashF (utcToZonedTime tz queryEnd) |+ "T" +| hmsF (utcToZonedTime tz queryEnd) |+ tzF (utcToZonedTime tz queryEnd),
           padRightF @Text 14 ' ' "Interval: " +| Text.pack (formatTime defaultTimeLocale "%d days, %H hours, %M minutes, %S seconds" $ diffUTCTime queryEnd queryStart) |+ "",
           padRightF @Text 14 ' ' "Limit: " +| maybe "<no-limit-specified>" (commaizeF . fromIntegral @Natural @Integer) limit |+ "",
