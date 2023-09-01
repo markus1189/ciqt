@@ -5,31 +5,31 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
-{-# OPTIONS_GHC -fdefer-type-errors #-}
+{-# OPTIONS_GHC -fdefer-type-errors -Wall #-}
 
 import Amazonka (trying)
 import Amazonka qualified as AWS
 import Amazonka.CloudWatchLogs (QueryStatus (..))
 import Amazonka.CloudWatchLogs qualified as Logs
 import Amazonka.CloudWatchLogs.GetQueryResults (getQueryResultsResponse_results, getQueryResultsResponse_statistics)
-import Amazonka.CloudWatchLogs.Lens (getQueryResultsResponse_status, resultField_field, resultField_value, startQueryResponse_queryId, startQuery_limit)
+import Amazonka.CloudWatchLogs.Lens (describeLogGroupsResponse_logGroups, describeLogGroups_logGroupNamePattern, getQueryResultsResponse_status, logGroup_logGroupName, resultField_field, resultField_value, startQueryResponse_queryId, startQuery_limit, describeLogGroups_logGroupNamePrefix, describeLogGroups_nextToken, describeLogGroupsResponse_nextToken)
 import Amazonka.CloudWatchLogs.StartQuery (startQuery_logGroupNames)
 import Amazonka.CloudWatchLogs.StopQuery (newStopQuery)
 import Amazonka.CloudWatchLogs.Types (QueryStatistics (QueryStatistics'), ResultField, bytesScanned, recordsMatched, recordsScanned)
-import Amazonka.Prelude (Identity (runIdentity), mapMaybe)
+import Amazonka.Prelude (mapMaybe)
 import Control.Applicative ((<|>))
 import Control.Lens (view, (%~))
 import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
 import Control.Monad (unless, when)
-import Control.Monad.Catch (MonadCatch, SomeException (SomeException), bracket, try)
+import Control.Monad.Catch (MonadCatch, bracket, try, SomeException)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Resource (MonadResource, ResourceT)
+import System.FilePath.Glob qualified as Glob
 import Control.Retry (constantDelay, limitRetriesByCumulativeDelay, retrying)
 import Data.Aeson (Value)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Lens (key)
-import Data.ByteString (toStrict)
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Foldable (for_)
@@ -47,7 +47,7 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatParseM)
 import Data.Traversable (for)
-import Fmt (build, commaizeF, dateDashF, hmsF, indentF, listF, padLeftF, padRightF, tzF, unwordsF, (+|), (|+))
+import Fmt (blockListF, build, commaizeF, dateDashF, hmsF, indentF, padLeftF, padRightF, tzF, (+|), (|+))
 import Formatting (sformat, (%), (%.))
 import Formatting.Combinators qualified as Formatters
 import Formatting.Formatters qualified as Formatters
@@ -74,9 +74,11 @@ import Options.Applicative
     (<**>),
   )
 import System.Exit (exitFailure, exitSuccess)
-import System.IO (Handle, hFlush, stderr, stdout)
-import System.IO qualified as IO
+import System.IO (hFlush, stderr, stdout)
 import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
+import System.FilePath.Glob (Pattern)
+
+data LogGroupsArg = CommaLogGroups (NonEmpty Text) | LogNamePattern Text | LogNamePrefix Text | LogNameGlob String deriving (Show, Eq)
 
 data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelative CalendarDiffTime deriving (Show)
 
@@ -88,7 +90,7 @@ data AppArgs = AppArgs
   { _appArgsQuery :: QueryArg,
     _appArgsLimit :: Maybe Limit,
     _appArgsTimeRange :: TimeRange,
-    _appArgsLogGroups :: NonEmpty Text,
+    _appArgsLogGroups :: LogGroupsArg,
     _appArgsDryRun :: Bool
   }
   deriving (Show)
@@ -137,10 +139,28 @@ appArgsParser =
             <|> MaxLimit <$ switch (long "limit-max" <> help "Use max limit for results from AWS")
         )
     logGroupsParser =
-      option
-        (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ","))
-        ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search"
-        )
+      ( CommaLogGroups
+          <$> option
+            (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ","))
+            ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search"
+            )
+      )
+        <|> ( LogNamePattern
+                <$> strOption
+                  ( long "log-group-pattern" <> metavar "LOG_GROUP_PATTERN" <> help "Match log groups based on case-sensitive substring search"
+                  )
+            )
+      <|> ( LogNamePrefix
+                <$> strOption
+                  ( long "log-group-prefix" <> metavar "LOG_GROUP_PREFIX" <> help "Match log groups based on case-sensitive prefix search"
+                  )
+            )
+      <|> ( LogNameGlob
+                <$> strOption
+                  ( long "log-group-glob" <> metavar "LOG_GROUP_GLOB" <> help "Retrieve ALL LOG GROUPS (!) and then match via glob pattern"
+                  )
+            )
+
 
 fastLoggerToAwsLogger :: FastLogger -> AWS.Logger
 fastLoggerToAwsLogger fastLogger lvl bss = when (lvl <= AWS.Error) $ fastLogger (toLogStr bss)
@@ -149,7 +169,8 @@ main :: IO ()
 main = do
   result <- try @_ @SomeException $ mainProgram
   case result of
-    Left e -> exitFailure
+    Left _ -> do
+      exitFailure
     Right () -> exitSuccess
 
 discoverAwsEnv :: (MonadIO m, MonadCatch m) => FastLogger -> m AWS.Env
@@ -163,18 +184,24 @@ mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
   appArgs <- execParser opts
 
   tz <- getCurrentTimeZone
-  discoveredEnv <- AWS.newEnv AWS.discover
   now <- liftIO getCurrentTime
   env <- discoverAwsEnv fastLogger
+
+  maybeLgs <- calculateLogGroups env (appArgs ^. appArgsLogGroups)
+  lgs <- case maybeLgs of
+    Nothing -> do
+      fastLogger $ toLogStr $ "Could not find any log groups from " <> Text.pack (show (appArgs ^. appArgsLogGroups))
+      exitFailure
+    Just lgs -> pure lgs
 
   let (queryStart, queryEnd) = calculateQueryStartEnd now appArgs
       limit = calculateLimit appArgs
 
   query <- calculateQuery appArgs
 
-  let awsQuery = buildQuery limit (appArgs ^. appArgsLogGroups) queryStart queryEnd query
+  let awsQuery = buildQuery limit lgs queryStart queryEnd query
 
-  printPreFlightInfo env tz (queryStart, queryEnd) (appArgs ^. appArgsLogGroups) limit query
+  printPreFlightInfo env tz (queryStart, queryEnd) lgs limit query
 
   unless (appArgs ^. appArgsDryRun) . AWS.runResourceT $ do
     liftIO $ TIO.hPutStrLn stderr "---------------------------"
@@ -189,6 +216,20 @@ mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
       liftIO $ do
         hFlush stdout
         TIO.hPutStrLn stderr $ "---------------------------\nStatistics:\n" +| fmap formatQueryStats stats |+ "\n---------------------------"
+
+calculateLogGroups :: AWS.Env -> LogGroupsArg -> IO (Maybe (NonEmpty Text))
+calculateLogGroups _ (CommaLogGroups lgs) = pure (Just lgs)
+calculateLogGroups env (LogNamePattern p) = AWS.runResourceT $ do
+  let query = Logs.newDescribeLogGroups & describeLogGroups_logGroupNamePattern ?~ p
+  res <- AWS.send env query
+  pure . (=<<) NonEmpty.nonEmpty . fmap (mapMaybe (view logGroup_logGroupName)) $ res ^. describeLogGroupsResponse_logGroups
+calculateLogGroups env (LogNamePrefix s) = AWS.runResourceT $ do
+  let query = Logs.newDescribeLogGroups & describeLogGroups_logGroupNamePrefix ?~ s
+  res <- AWS.send env query
+  pure . (=<<) NonEmpty.nonEmpty . fmap (mapMaybe (view logGroup_logGroupName)) $ res ^. describeLogGroupsResponse_logGroups
+calculateLogGroups env (LogNameGlob patternString) = AWS.runResourceT $ do
+  lgs <- describeAllLogGroups env Nothing
+  pure $ NonEmpty.nonEmpty . mapMaybe (view logGroup_logGroupName) $ filter (globLogGroupName (Glob.compile patternString)) lgs
 
 calculateQueryStartEnd :: UTCTime -> AppArgs -> (UTCTime, UTCTime)
 calculateQueryStartEnd now appArgs =
@@ -216,7 +257,7 @@ buildQuery n lgs qstart qend q =
     toSeconds = round . utcTimeToPOSIXSeconds
 
 parseNestedJson :: Value -> Value
-parseNestedJson v@(Aeson.String s) = fromMaybe v (Aeson.decode @Value $ toLazyByteString $ Text.encodeUtf8Builder s)
+parseNestedJson v@(Aeson.String s) = Data.Maybe.fromMaybe v (Aeson.decode @Value $ toLazyByteString $ Text.encodeUtf8Builder s)
 parseNestedJson v = v
 
 resultFieldsToJson :: [ResultField] -> Aeson.Value
@@ -275,7 +316,7 @@ formatQueryStats QueryStatistics' {recordsScanned = scanned, bytesScanned = byte
     " / "
     [ "Records matched: " +| padLeftF 13 ' ' (commaizeF @Integer . round <$> matched),
       "Records scanned: " +| padLeftF 13 ' ' (commaizeF @Integer . round <$> scanned),
-      sformat ("Bytes Scanned: " % (Formatters.left 13 ' ' %. Formatters.maybed "" (Formatters.bytes (Formatters.fixed 2)))) (fmap round bytesS)
+      sformat ("Bytes Scanned: " % (Formatters.left 13 ' ' %. Formatters.maybed "" (Formatters.bytes @Double @Integer (Formatters.fixed 2)))) (fmap round bytesS)
     ]
 
 printPreFlightInfo :: AWS.Env -> TimeZone -> (UTCTime, UTCTime) -> NonEmpty Text -> Maybe Natural -> Text -> IO ()
@@ -288,9 +329,26 @@ printPreFlightInfo awsEnv tz (queryStart, queryEnd) logGroups limit query = do
           padRightF @Text 14 ' ' "Query Start: " +| dateDashF (utcToZonedTime tz queryStart) |+ "T" +| hmsF (utcToZonedTime tz queryStart) |+ tzF (utcToZonedTime tz queryStart),
           padRightF @Text 14 ' ' "Query End: " +| dateDashF (utcToZonedTime tz queryEnd) |+ "T" +| hmsF (utcToZonedTime tz queryEnd) |+ tzF (utcToZonedTime tz queryEnd),
           padRightF @Text 14 ' ' "Interval: " +| Text.pack (formatTime defaultTimeLocale "%d days, %H hours, %M minutes, %S seconds" $ diffUTCTime queryEnd queryStart) |+ "",
-          padRightF @Text 14 ' ' "Limit: " +| maybe "<no-limit-specified>" (commaizeF . fromIntegral @Natural @Integer) limit |+ "",
-          padRightF @Text 14 ' ' "LogGroups: " +| unwordsF logGroups |+ "",
+          padRightF @Text 14 ' ' "Limit: " +| maybe "<no-limit-specified>" (commaizeF . fromIntegral @Natural @Integer) limit,
+          "LogGroups:\n\n" +| indentF 2 (blockListF logGroups),
           "Query:\n\n" +| indentF 2 (build query),
           "---------------------------"
         ]
     )
+
+describeAllLogGroups :: MonadResource m => AWS.Env -> Maybe Text -> m [Logs.LogGroup]
+describeAllLogGroups env nextToken = do
+  let query = Logs.newDescribeLogGroups & describeLogGroups_nextToken .~ nextToken
+  res <- AWS.send env query
+  let lgs = fromMaybe [] $ res ^. describeLogGroupsResponse_logGroups
+  let nextNextToken = res ^. describeLogGroupsResponse_nextToken
+  case nextNextToken of
+    Nothing -> pure lgs
+    Just t -> do
+      lgs' <- describeAllLogGroups env (Just t)
+      pure $ lgs ++ lgs'
+
+globLogGroupName :: Pattern -> Logs.LogGroup -> Bool
+globLogGroupName p lg = case view logGroup_logGroupName lg of
+  Nothing -> False
+  Just n -> Glob.match p (Text.unpack n)
