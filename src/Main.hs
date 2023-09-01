@@ -22,7 +22,7 @@ import Control.Lens (view, (%~))
 import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
 import Control.Monad (unless, when)
-import Control.Monad.Catch (SomeException (SomeException), bracket, try)
+import Control.Monad.Catch (SomeException (SomeException), bracket, try, MonadCatch)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Resource (MonadResource, ResourceT)
 import Control.Retry (constantDelay, limitRetriesByCumulativeDelay, retrying)
@@ -76,6 +76,7 @@ import System.Exit (exitFailure, exitSuccess)
 import System.IO (Handle, hFlush, stderr, stdout)
 import System.IO qualified as IO
 import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
+import Data.Functor.Identity (Identity)
 
 data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelative CalendarDiffTime deriving (Show)
 
@@ -151,6 +152,11 @@ main = do
     Left e -> exitFailure
     Right () -> exitSuccess
 
+discoverAwsEnv :: (MonadIO m, MonadCatch m) => FastLogger -> m (AWS.Env' Identity)
+discoverAwsEnv logger = do
+  env <- AWS.newEnv AWS.discover
+  pure $ env {AWS.logger = fastLoggerToAwsLogger logger}
+
 mainProgram :: IO ()
 mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
   let opts = info (appArgsParser <**> helper) (fullDesc <> progDesc "Execute cloudwatch insights log queries")
@@ -159,9 +165,9 @@ mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
   tz <- getCurrentTimeZone
   discoveredEnv <- AWS.newEnv AWS.discover
   now <- liftIO getCurrentTime
+  env <- discoverAwsEnv fastLogger
 
-  let env = discoveredEnv {AWS.logger = fastLoggerToAwsLogger fastLogger, AWS.region = AWS.Frankfurt}
-      (queryStart, queryEnd) = calculateQueryStartEnd now appArgs
+  let (queryStart, queryEnd) = calculateQueryStartEnd now appArgs
       limit = calculateLimit appArgs
 
   query <- calculateQuery appArgs
