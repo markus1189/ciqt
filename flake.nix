@@ -15,7 +15,7 @@
       haskellPackagesModifier = hsPkgs:
         hsPkgs.override {
           overrides = final: prev: {
-            amazonka = assert prev.amazonka.version != "2.0";
+            amazonka =
               final.callHackageDirect {
                 pkg = "amazonka";
                 ver = amazonkaVer;
@@ -49,7 +49,7 @@
 
             } { };
 
-            crypton = final.callHackageDirect {
+            crypton = assert prev.crypton.version != "0.33"; final.callHackageDirect {
               pkg = "crypton";
               ver = "0.33";
               sha256 = "sha256-bq1ypwOhYC8OR5XDWDj0u4+gTygxcwnPL+IffUWvlhg=";
