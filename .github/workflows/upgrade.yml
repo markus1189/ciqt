@@ -20,7 +20,7 @@ jobs:
     - name: perform flake update
       run: |
         nix flake update
-        nix build
+        nix build -L
     - run: |
         git add .
         git commit -m "Flake Update" && git push origin || echo "nothing to do"
