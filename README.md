@@ -1,5 +1,9 @@
 # CloudWatch Insights Query Tool
 
+<p align="center">
+  <img src="assets/logo.png" alt="CloudWatch Insights Query Tool Logo" width="200">
+</p>
+
 A command-line utility for executing and retrieving CloudWatch Insights queries with flexible log group selection and time range options.
 
 ## Features
