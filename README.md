@@ -21,7 +21,7 @@ A command-line utility for executing and retrieving CloudWatch Insights queries 
 ## Usage
 
 ```
-cloudwatch-insights-query [OPTIONS]
+ciqt [OPTIONS]
 ```
 
 ### Options
