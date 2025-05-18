@@ -79,8 +79,8 @@ import Options.Applicative
   )
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath.Glob (Pattern, compDefault, tryCompileWith)
-import System.Directory (doesFileExist, getHomeDirectory)
-import System.FilePath ((</>), takeDirectory, createDirectoryIfMissing)
+import System.Directory (doesFileExist, getHomeDirectory, createDirectoryIfMissing)
+import System.FilePath ((</>), takeDirectory)
 import System.FilePath.Glob qualified as Glob
 import System.IO (hFlush, stderr, stdout)
 import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
