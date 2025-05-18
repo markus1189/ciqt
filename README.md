@@ -82,6 +82,49 @@ The tool outputs:
 - AWS credentials configured (via environment variables, AWS profile, etc.)
 - Appropriate IAM permissions for CloudWatch Logs access
 
+## Query Library
+
+The tool supports maintaining a library of saved queries for easy reuse.
+
+### Library Structure
+
+By default, the query library is located at `~/.ciqt/queries/`. Each query is stored as a separate file with a `.query` extension.
+
+### Using Library Queries
+
+To use a query from your library:
+
+```
+ciqt --query-name my-query --log-groups /aws/lambda/my-function
+```
+
+You can specify a custom library location:
+
+```
+ciqt --query-name my-query --query-library /path/to/queries --log-groups /aws/lambda/my-function
+```
+
+### Viewing Library Queries
+
+To view the content of a saved query without executing it:
+
+```
+ciqt --query-name my-query --show-query
+```
+
+This will display the query content and exit without connecting to AWS.
+
+### Managing Library Queries
+
+To add queries to your library, simply create text files with the `.query` extension in your query library directory:
+
+```
+mkdir -p ~/.ciqt/queries
+echo "fields @timestamp, @message | filter @message like 'ERROR'" > ~/.ciqt/queries/errors.query
+```
+
+You can organize queries in subdirectories for better management.
+
 ## Notes
 
 - When using `--log-group-glob` or `--log-group-regex`, the tool retrieves all log groups first, which may be slow in accounts with many log groups

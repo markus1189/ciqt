@@ -22,7 +22,7 @@ import Control.Applicative ((<|>))
 import Control.Lens (view, (%~))
 import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
-import Control.Monad (unless, when)
+import Control.Monad (unless, when, void)
 import Control.Monad.Catch (MonadCatch, SomeException, bracket, try)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Fail (FailT, runFailT)
@@ -40,7 +40,7 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.List.Split (splitOn)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
@@ -79,6 +79,8 @@ import Options.Applicative
   )
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath.Glob (Pattern, compDefault, tryCompileWith)
+import System.Directory (doesFileExist, getHomeDirectory)
+import System.FilePath ((</>), takeDirectory, createDirectoryIfMissing)
 import System.FilePath.Glob qualified as Glob
 import System.IO (hFlush, stderr, stdout)
 import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
@@ -102,14 +104,16 @@ data TimeRange = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) | TimeRangeRelati
 
 data Limit = ExplicitLimit Natural | MaxLimit deriving (Eq, Show)
 
-data QueryArg = QueryFile FilePath | QueryString Text deriving (Eq, Show)
+data QueryArg = QueryFile FilePath | QueryString Text | QueryLibrary Text deriving (Eq, Show)
 
 data AppArgs = AppArgs
   { _appArgsQuery :: QueryArg,
     _appArgsLimit :: Maybe Limit,
     _appArgsTimeRange :: TimeRange,
     _appArgsLogGroups :: LogGroupsArg,
-    _appArgsDryRun :: Bool
+    _appArgsDryRun :: Bool,
+    _appArgsQueryLibrary :: Maybe FilePath,
+    _appArgsShowQueryOnly :: Bool
   }
   deriving (Show)
 
@@ -118,11 +122,16 @@ makeLenses ''AppArgs
 appArgsParser :: Parser AppArgs
 appArgsParser =
   AppArgs
-    <$> (queryFileParser <|> queryStringParser)
+    <$> (queryFileParser <|> queryStringParser <|> queryLibraryParser)
     <*> limitParser
     <*> (timeRangeAbsolute <|> timeRangeRelative)
     <*> logGroupsParser
     <*> switch (long "dry-run" <> help "Print arguments and query, but don't start it")
+    <*> optional (strOption 
+          (long "query-library" 
+          <> metavar "DIR" 
+          <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+    <*> switch (long "show-query" <> help "Only show the query content without executing it")
   where
     timeRangeAbsolute =
       TimeRangeAbsolute
@@ -149,6 +158,14 @@ appArgsParser =
               <> help "Cloudwatch query to execute"
               <> showDefault
               <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
+          )
+          
+    queryLibraryParser =
+      QueryLibrary
+        <$> strOption
+          ( long "query-name"
+              <> metavar "NAME"
+              <> help "Name of saved query from your query library"
           )
     limitParser =
       optional
@@ -200,6 +217,12 @@ mainProgram :: IO ()
 mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
   let opts = info (appArgsParser <**> helper) (fullDesc <> progDesc "Execute cloudwatch insights log queries")
   appArgs <- execParser opts
+
+  -- If we just want to show the query, do that and exit
+  when (appArgs ^. appArgsShowQueryOnly) $ do
+    query <- calculateQuery appArgs
+    TIO.putStrLn query
+    exitSuccess
 
   tz <- getCurrentTimeZone
   now <- liftIO getCurrentTime
@@ -266,10 +289,27 @@ calculateLimit appArgs =
     MaxLimit -> 10000
     ExplicitLimit x -> x
 
+-- | Expand ~ in file paths to the user's home directory
+expandTilde :: FilePath -> IO FilePath
+expandTilde path = case path of
+  '~':'/':rest -> do
+    home <- getHomeDirectory
+    return $ home </> rest
+  _ -> return path
+
 calculateQuery :: AppArgs -> IO Text
 calculateQuery appArgs = case appArgs ^. appArgsQuery of
   QueryString q -> pure q
   QueryFile f -> TIO.readFile f
+  QueryLibrary name -> do
+    let defaultDir = "~/.ciqt/queries"
+    libPath <- maybe defaultDir id <$> pure (appArgs ^. appArgsQueryLibrary)
+    expandedPath <- expandTilde libPath
+    let queryPath = expandedPath </> Text.unpack name <> ".query"
+    exists <- doesFileExist queryPath
+    if exists
+      then TIO.readFile queryPath
+      else fail $ "Query '" ++ Text.unpack name ++ "' not found in library: " ++ expandedPath
 
 buildQuery :: Maybe Natural -> NonEmpty Text -> UTCTime -> UTCTime -> Text -> Logs.StartQuery
 buildQuery n lgs qstart qend q =
