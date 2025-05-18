@@ -6,10 +6,12 @@ dependencies:
   - amazonka-cloudwatch-logs >= 2.0
   - bytestring
   - containers
+  - directory
   - exceptions
   - either
   - fast-logger >= 3.2
   - FailT
+  - filepath
   - fmt
   - formatting >= 7.2.0
   - Glob
