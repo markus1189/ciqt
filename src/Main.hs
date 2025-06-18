@@ -62,7 +62,9 @@ import Options.Applicative
     command,
     eitherReader,
     execParser,
+    footer,
     fullDesc,
+    header,
     help,
     helper,
     info,
@@ -165,9 +167,12 @@ appArgsParser = AppArgs
 
 commandParser :: Parser Command
 commandParser = subparser
-  ( command "run" (info (RunCommand <$> runArgsParser) (progDesc "Execute CloudWatch Insights queries"))
-  <> command "library" (info (LibraryCommand <$> libraryArgsParser) (progDesc "Manage query library"))
-  <> command "query" (info (QueryShowCommand <$> queryArgsParser) (progDesc "Query operations without execution"))
+  ( command "run" (info (RunCommand <$> runArgsParser <**> helper) 
+      (progDesc "Execute CloudWatch Insights queries against specified log groups and time ranges"))
+  <> command "library" (info (LibraryCommand <$> libraryArgsParser <**> helper) 
+      (progDesc "Manage saved queries in your query library (~/.ciqt/queries by default)"))
+  <> command "query" (info (QueryShowCommand <$> queryArgsParser <**> helper) 
+      (progDesc "Display query content without execution (useful for validation)"))
   ) <|> RunCommand <$> runArgsParser  -- Default to run command for backward compatibility
 
 runArgsParser :: Parser RunArgs
@@ -176,7 +181,7 @@ runArgsParser = RunArgs
   <*> limitParser
   <*> optional timeRangeParser
   <*> optional logGroupsParser
-  <*> switch (long "dry-run" <> help "Print arguments and query, but don't start it")
+  <*> switch (long "dry-run" <> help "Print query details and arguments without executing the query")
   <*> optional (strOption 
         (long "query-library" 
         <> metavar "DIR" 
@@ -192,24 +197,28 @@ libraryArgsParser = LibraryArgs
 
 libraryOperationParser :: Parser LibraryOperation
 libraryOperationParser = subparser
-  ( command "list" (info (pure ListQueries) (progDesc "List all available queries in the library"))
-  <> command "save" (info saveQueryParser (progDesc "Save a query to the library"))
-  <> command "delete" (info deleteQueryParser (progDesc "Delete a query from the library"))
-  <> command "show" (info showQueryParser (progDesc "Show a query from the library"))
+  ( command "list" (info (pure ListQueries <**> helper) 
+      (progDesc "List all available queries in the library with directory structure"))
+  <> command "save" (info (saveQueryParser <**> helper)
+      (progDesc "Save a query to the library (supports nested directories like 'aws/lambda/errors')"))
+  <> command "delete" (info (deleteQueryParser <**> helper)
+      (progDesc "Delete a saved query from the library"))
+  <> command "show" (info (showQueryParser <**> helper)
+      (progDesc "Display the content of a saved query without executing it"))
   )
 
 saveQueryParser :: Parser LibraryOperation
 saveQueryParser = SaveQuery
-  <$> strArgument (metavar "NAME" <> help "Name to save the query as")
+  <$> strArgument (metavar "NAME" <> help "Name/path to save the query as (e.g., 'aws/lambda/errors')")
   <*> queryArgParser
 
 deleteQueryParser :: Parser LibraryOperation
 deleteQueryParser = DeleteQuery
-  <$> strArgument (metavar "NAME" <> help "Name of query to delete")
+  <$> strArgument (metavar "NAME" <> help "Name/path of query to delete (e.g., 'aws/lambda/errors')")
 
 showQueryParser :: Parser LibraryOperation
 showQueryParser = ShowQuery
-  <$> strArgument (metavar "NAME" <> help "Name of query to show")
+  <$> strArgument (metavar "NAME" <> help "Name/path of query to display (e.g., 'aws/lambda/errors')")
 
 queryArgsParser :: Parser QueryShowArgs
 queryArgsParser = QueryShowArgs
@@ -226,14 +235,14 @@ queryArgParser = queryFileParser <|> queryStringParser <|> queryLibraryParser
       <$> strOption
         ( long "query-file"
             <> metavar "FILE"
-            <> help "Path to a file with a cloudwatch insights query"
+            <> help "Path to a file containing a CloudWatch Insights query"
         )
 
     queryStringParser = QueryString
       <$> strOption
         ( long "query"
             <> metavar "QUERY"
-            <> help "Cloudwatch query to execute"
+            <> help "CloudWatch Insights query string to execute"
             <> showDefault
             <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
         )
@@ -242,24 +251,27 @@ queryArgParser = queryFileParser <|> queryStringParser <|> queryLibraryParser
       <$> strOption
         ( long "query-name"
             <> metavar "NAME"
-            <> help "Name of saved query from your query library"
+            <> help "Name/path of saved query from library (e.g., 'aws/lambda/errors')"
         )
 
 timeRangeParser :: Parser TimeRange
 timeRangeParser = timeRangeAbsolute <|> timeRangeRelative
   where
     timeRangeAbsolute = TimeRangeAbsolute
-      <$> option (maybeReader (formatParseM iso8601Format)) (long "start" <> metavar "TIME")
-      <*> optional (option (maybeReader (formatParseM iso8601Format)) (long "end" <> metavar "TIME"))
+      <$> option (maybeReader (formatParseM iso8601Format)) 
+          (long "start" <> metavar "TIME" <> help "Query start time in ISO8601 format (e.g., 2023-01-01T00:00:00Z)")
+      <*> optional (option (maybeReader (formatParseM iso8601Format)) 
+          (long "end" <> metavar "TIME" <> help "Query end time in ISO8601 format (defaults to current time)"))
 
     timeRangeRelative = TimeRangeRelative
-      <$> option (maybeReader (formatParseM iso8601Format)) (long "since" <> metavar "ISO8601_DURATION")
+      <$> option (maybeReader (formatParseM iso8601Format)) 
+          (long "since" <> metavar "ISO8601_DURATION" <> help "Query time range as ISO8601 duration (e.g., P1D for 1 day, PT1H for 1 hour)")
 
 limitParser :: Parser (Maybe Limit)
 limitParser = optional
   ( ExplicitLimit
-      <$> option auto (long "limit" <> metavar "POSINT")
-      <|> MaxLimit <$ switch (long "limit-max" <> help "Use max limit for results from AWS")
+      <$> option auto (long "limit" <> metavar "POSINT" <> help "Maximum number of log entries to return")
+      <|> MaxLimit <$ switch (long "limit-max" <> help "Use maximum limit (10,000) for results from AWS")
   )
 
 logGroupsParser :: Parser LogGroupsArg
@@ -267,25 +279,25 @@ logGroupsParser =
   CommaLogGroups
     <$> option
       (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ","))
-      ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search"
+      ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma-separated list of CloudWatch log groups (e.g., '/aws/lambda/func1,/aws/lambda/func2')"
       )
     <|> LogNamePattern
       <$> strOption
-        ( long "log-group-pattern" <> metavar "LOG_GROUP_PATTERN" <> help "Match log groups based on case-sensitive substring search"
+        ( long "log-group-pattern" <> metavar "PATTERN" <> help "Match log groups containing this substring (case-sensitive)"
         )
     <|> LogNamePrefix
       <$> strOption
-        ( long "log-group-prefix" <> metavar "LOG_GROUP_PREFIX" <> help "Match log groups based on case-sensitive prefix search"
+        ( long "log-group-prefix" <> metavar "PREFIX" <> help "Match log groups starting with this prefix (case-sensitive)"
         )
     <|> LogNameGlob
       <$> option
         (eitherReader (\t -> mapLeft (\err -> "Could not compile glob: " +| t |+ ". Error was: " +| err |+ "") . tryCompileWith compDefault $ t))
-        ( long "log-group-glob" <> metavar "LOG_GROUP_GLOB" <> help "Retrieve ALL LOG GROUPS (!) and then match via glob pattern"
+        ( long "log-group-glob" <> metavar "GLOB" <> help "Match log groups using glob pattern (e.g., '/aws/lambda/*' - WARNING: fetches ALL log groups first)"
         )
     <|> LogNameRegex
       <$> option
         (eitherReader (\t -> fmap (Text.pack t,) . mapLeft (\err -> "Could not parse regex: " +| t |+ ". Error was: " +| err |+ "") . runIdentity . runFailT . makeRegexM @Regex @_ @_ @_ @(FailT String Identity) $ t))
-        ( long "log-group-regex" <> metavar "LOG_GROUP_REGEX" <> help "Retrieve ALL LOG GROUPS (!) and then match via PCRE regex"
+        ( long "log-group-regex" <> metavar "REGEX" <> help "Match log groups using PCRE regex (e.g., '/aws/lambda/.*' - WARNING: fetches ALL log groups first)"
         )
 
 fastLoggerToAwsLogger :: FastLogger -> AWS.Logger
@@ -305,7 +317,12 @@ discoverAwsEnv logger = do
 
 mainProgram :: IO ()
 mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
-  let opts = info (appArgsParser <**> helper) (fullDesc <> progDesc "CloudWatch Insights Query Tool")
+  let opts = info (appArgsParser <**> helper) 
+        ( fullDesc 
+        <> progDesc "Execute and manage CloudWatch Insights queries with flexible log group selection and time ranges"
+        <> header "ciqt - CloudWatch Insights Query Tool"
+        <> footer "Examples:\n  ciqt run --query 'fields @timestamp, @message | limit 10' --log-groups '/aws/lambda/my-function' --start 2023-01-01T00:00:00Z\n  ciqt library list\n  ciqt library save my-query --query 'fields @timestamp | limit 100'"
+        )
   appArgs <- execParser opts
   
   case appArgs ^. appArgsCommand of
