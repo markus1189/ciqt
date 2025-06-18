@@ -59,6 +59,7 @@ import Numeric.Natural (Natural)
 import Options.Applicative
   ( Parser,
     auto,
+    command,
     eitherReader,
     execParser,
     fullDesc,
@@ -72,7 +73,9 @@ import Options.Applicative
     optional,
     progDesc,
     showDefault,
+    strArgument,
     strOption,
+    subparser,
     switch,
     value,
     (<**>),
@@ -106,109 +109,184 @@ data Limit = ExplicitLimit Natural | MaxLimit deriving (Eq, Show)
 
 data QueryArg = QueryFile FilePath | QueryString Text | QueryLibrary Text deriving (Eq, Show)
 
-data AppArgs = AppArgs
-  { _appArgsQuery :: QueryArg,
-    _appArgsLimit :: Maybe Limit,
-    _appArgsTimeRange :: Maybe TimeRange,
-    _appArgsLogGroups :: Maybe LogGroupsArg,
-    _appArgsDryRun :: Bool,
-    _appArgsQueryLibrary :: Maybe FilePath,
-    _appArgsShowQueryOnly :: Bool,
-    _appArgsListQueries :: Bool,
-    _appArgsSaveQuery :: Maybe Text,
-    _appArgsDeleteQuery :: Maybe Text
+data RunArgs = RunArgs
+  { _runArgsQuery :: QueryArg,
+    _runArgsLimit :: Maybe Limit,
+    _runArgsTimeRange :: Maybe TimeRange,
+    _runArgsLogGroups :: Maybe LogGroupsArg,
+    _runArgsDryRun :: Bool,
+    _runArgsQueryLibrary :: Maybe FilePath
   }
   deriving (Show)
 
+data LibraryOperation
+  = ListQueries
+  | SaveQuery Text QueryArg
+  | DeleteQuery Text
+  | ShowQuery Text
+  deriving (Show)
+
+data LibraryArgs = LibraryArgs
+  { _libraryArgsOperation :: LibraryOperation,
+    _libraryArgsQueryLibrary :: Maybe FilePath
+  }
+  deriving (Show)
+
+data QueryShowArgs = QueryShowArgs
+  { _queryShowArgsQuery :: QueryArg,
+    _queryShowArgsQueryLibrary :: Maybe FilePath
+  }
+  deriving (Show)
+
+data Command
+  = RunCommand RunArgs
+  | LibraryCommand LibraryArgs
+  | QueryShowCommand QueryShowArgs
+  deriving (Show)
+
+data AppArgs = AppArgs
+  { _appArgsCommand :: Command,
+    _appArgsGlobalQueryLibrary :: Maybe FilePath
+  }
+  deriving (Show)
+
+makeLenses ''RunArgs
+makeLenses ''LibraryArgs
+makeLenses ''QueryShowArgs
 makeLenses ''AppArgs
 
 appArgsParser :: Parser AppArgs
-appArgsParser =
-  AppArgs
-    <$> (queryFileParser <|> queryStringParser <|> queryLibraryParser)
-    <*> limitParser
-    <*> optional (timeRangeAbsolute <|> timeRangeRelative)
-    <*> optional logGroupsParser
-    <*> switch (long "dry-run" <> help "Print arguments and query, but don't start it")
-    <*> optional (strOption 
-          (long "query-library" 
-          <> metavar "DIR" 
-          <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
-    <*> switch (long "show-query" <> help "Only show the query content without executing it")
-    <*> switch (long "list-queries" <> help "List all available queries in the library")
-    <*> optional (strOption 
-          (long "save-query" 
-          <> metavar "NAME" 
-          <> help "Save the current query to the library with the given name"))
-    <*> optional (strOption 
-          (long "delete-query" 
-          <> metavar "NAME" 
-          <> help "Delete a query from the library"))
+appArgsParser = AppArgs
+  <$> commandParser
+  <*> optional (strOption 
+        (long "query-library" 
+        <> metavar "DIR" 
+        <> help "Global path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+
+commandParser :: Parser Command
+commandParser = subparser
+  ( command "run" (info (RunCommand <$> runArgsParser) (progDesc "Execute CloudWatch Insights queries"))
+  <> command "library" (info (LibraryCommand <$> libraryArgsParser) (progDesc "Manage query library"))
+  <> command "query" (info (QueryShowCommand <$> queryArgsParser) (progDesc "Query operations without execution"))
+  ) <|> RunCommand <$> runArgsParser  -- Default to run command for backward compatibility
+
+runArgsParser :: Parser RunArgs
+runArgsParser = RunArgs
+  <$> queryArgParser
+  <*> limitParser
+  <*> optional timeRangeParser
+  <*> optional logGroupsParser
+  <*> switch (long "dry-run" <> help "Print arguments and query, but don't start it")
+  <*> optional (strOption 
+        (long "query-library" 
+        <> metavar "DIR" 
+        <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+
+libraryArgsParser :: Parser LibraryArgs
+libraryArgsParser = LibraryArgs
+  <$> libraryOperationParser
+  <*> optional (strOption 
+        (long "query-library" 
+        <> metavar "DIR" 
+        <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+
+libraryOperationParser :: Parser LibraryOperation
+libraryOperationParser = subparser
+  ( command "list" (info (pure ListQueries) (progDesc "List all available queries in the library"))
+  <> command "save" (info saveQueryParser (progDesc "Save a query to the library"))
+  <> command "delete" (info deleteQueryParser (progDesc "Delete a query from the library"))
+  <> command "show" (info showQueryParser (progDesc "Show a query from the library"))
+  )
+
+saveQueryParser :: Parser LibraryOperation
+saveQueryParser = SaveQuery
+  <$> strArgument (metavar "NAME" <> help "Name to save the query as")
+  <*> queryArgParser
+
+deleteQueryParser :: Parser LibraryOperation
+deleteQueryParser = DeleteQuery
+  <$> strArgument (metavar "NAME" <> help "Name of query to delete")
+
+showQueryParser :: Parser LibraryOperation
+showQueryParser = ShowQuery
+  <$> strArgument (metavar "NAME" <> help "Name of query to show")
+
+queryArgsParser :: Parser QueryShowArgs
+queryArgsParser = QueryShowArgs
+  <$> queryArgParser
+  <*> optional (strOption 
+        (long "query-library" 
+        <> metavar "DIR" 
+        <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+
+queryArgParser :: Parser QueryArg
+queryArgParser = queryFileParser <|> queryStringParser <|> queryLibraryParser
   where
-    timeRangeAbsolute =
-      TimeRangeAbsolute
-        <$> option (maybeReader (formatParseM iso8601Format)) (long "start" <> metavar "TIME")
-        <*> optional (option (maybeReader (formatParseM iso8601Format)) (long "end" <> metavar "TIME"))
-
-    timeRangeRelative =
-      TimeRangeRelative
-        <$> option (maybeReader (formatParseM iso8601Format)) (long "since" <> metavar "ISO8601_DURATION")
-
-    queryFileParser =
-      QueryFile
-        <$> strOption
-          ( long "query-file"
-              <> metavar "FILE"
-              <> help "Path to a file with a cloudwatch insights query"
-          )
-
-    queryStringParser =
-      QueryString
-        <$> strOption
-          ( long "query"
-              <> metavar "QUERY"
-              <> help "Cloudwatch query to execute"
-              <> showDefault
-              <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
-          )
-          
-    queryLibraryParser =
-      QueryLibrary
-        <$> strOption
-          ( long "query-name"
-              <> metavar "NAME"
-              <> help "Name of saved query from your query library"
-          )
-    limitParser =
-      optional
-        ( ExplicitLimit
-            <$> option auto (long "limit" <> metavar "POSINT")
-            <|> MaxLimit <$ switch (long "limit-max" <> help "Use max limit for results from AWS")
+    queryFileParser = QueryFile
+      <$> strOption
+        ( long "query-file"
+            <> metavar "FILE"
+            <> help "Path to a file with a cloudwatch insights query"
         )
-    logGroupsParser =
-      CommaLogGroups
-        <$> option
-          (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ","))
-          ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search"
-          )
-        <|> LogNamePattern
-          <$> strOption
-            ( long "log-group-pattern" <> metavar "LOG_GROUP_PATTERN" <> help "Match log groups based on case-sensitive substring search"
-            )
-        <|> LogNamePrefix
-          <$> strOption
-            ( long "log-group-prefix" <> metavar "LOG_GROUP_PREFIX" <> help "Match log groups based on case-sensitive prefix search"
-            )
-        <|> LogNameGlob
-          <$> option
-            (eitherReader (\t -> mapLeft (\err -> "Could not compile glob: " +| t |+ ". Error was: " +| err |+ "") . tryCompileWith compDefault $ t))
-            ( long "log-group-glob" <> metavar "LOG_GROUP_GLOB" <> help "Retrieve ALL LOG GROUPS (!) and then match via glob pattern"
-            )
-        <|> LogNameRegex
-          <$> option
-            (eitherReader (\t -> fmap (Text.pack t,) . mapLeft (\err -> "Could not parse regex: " +| t |+ ". Error was: " +| err |+ "") . runIdentity . runFailT . makeRegexM @Regex @_ @_ @_ @(FailT String Identity) $ t))
-            ( long "log-group-regex" <> metavar "LOG_GROUP_REGEX" <> help "Retrieve ALL LOG GROUPS (!) and then match via PCRE regex"
-            )
+
+    queryStringParser = QueryString
+      <$> strOption
+        ( long "query"
+            <> metavar "QUERY"
+            <> help "Cloudwatch query to execute"
+            <> showDefault
+            <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
+        )
+        
+    queryLibraryParser = QueryLibrary
+      <$> strOption
+        ( long "query-name"
+            <> metavar "NAME"
+            <> help "Name of saved query from your query library"
+        )
+
+timeRangeParser :: Parser TimeRange
+timeRangeParser = timeRangeAbsolute <|> timeRangeRelative
+  where
+    timeRangeAbsolute = TimeRangeAbsolute
+      <$> option (maybeReader (formatParseM iso8601Format)) (long "start" <> metavar "TIME")
+      <*> optional (option (maybeReader (formatParseM iso8601Format)) (long "end" <> metavar "TIME"))
+
+    timeRangeRelative = TimeRangeRelative
+      <$> option (maybeReader (formatParseM iso8601Format)) (long "since" <> metavar "ISO8601_DURATION")
+
+limitParser :: Parser (Maybe Limit)
+limitParser = optional
+  ( ExplicitLimit
+      <$> option auto (long "limit" <> metavar "POSINT")
+      <|> MaxLimit <$ switch (long "limit-max" <> help "Use max limit for results from AWS")
+  )
+
+logGroupsParser :: Parser LogGroupsArg
+logGroupsParser = 
+  CommaLogGroups
+    <$> option
+      (maybeReader (NonEmpty.nonEmpty . map Text.pack . splitOn ","))
+      ( long "log-groups" <> metavar "LOG_GROUPS" <> help "Comma separated list of cloudwatch log groups to search"
+      )
+    <|> LogNamePattern
+      <$> strOption
+        ( long "log-group-pattern" <> metavar "LOG_GROUP_PATTERN" <> help "Match log groups based on case-sensitive substring search"
+        )
+    <|> LogNamePrefix
+      <$> strOption
+        ( long "log-group-prefix" <> metavar "LOG_GROUP_PREFIX" <> help "Match log groups based on case-sensitive prefix search"
+        )
+    <|> LogNameGlob
+      <$> option
+        (eitherReader (\t -> mapLeft (\err -> "Could not compile glob: " +| t |+ ". Error was: " +| err |+ "") . tryCompileWith compDefault $ t))
+        ( long "log-group-glob" <> metavar "LOG_GROUP_GLOB" <> help "Retrieve ALL LOG GROUPS (!) and then match via glob pattern"
+        )
+    <|> LogNameRegex
+      <$> option
+        (eitherReader (\t -> fmap (Text.pack t,) . mapLeft (\err -> "Could not parse regex: " +| t |+ ". Error was: " +| err |+ "") . runIdentity . runFailT . makeRegexM @Regex @_ @_ @_ @(FailT String Identity) $ t))
+        ( long "log-group-regex" <> metavar "LOG_GROUP_REGEX" <> help "Retrieve ALL LOG GROUPS (!) and then match via PCRE regex"
+        )
 
 fastLoggerToAwsLogger :: FastLogger -> AWS.Logger
 fastLoggerToAwsLogger fastLogger lvl bss = when (lvl <= AWS.Error) $ fastLogger (toLogStr bss)
@@ -227,41 +305,26 @@ discoverAwsEnv logger = do
 
 mainProgram :: IO ()
 mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
-  let opts = info (appArgsParser <**> helper) (fullDesc <> progDesc "Execute cloudwatch insights log queries")
+  let opts = info (appArgsParser <**> helper) (fullDesc <> progDesc "CloudWatch Insights Query Tool")
   appArgs <- execParser opts
+  
+  case appArgs ^. appArgsCommand of
+    RunCommand runArgs -> handleRunCommand fastLogger runArgs (appArgs ^. appArgsGlobalQueryLibrary)
+    LibraryCommand libArgs -> handleLibraryCommand libArgs (appArgs ^. appArgsGlobalQueryLibrary)
+    QueryShowCommand queryArgs -> handleQueryShowCommand queryArgs (appArgs ^. appArgsGlobalQueryLibrary)
 
-  -- Handle query library operations first
-  when (appArgs ^. appArgsListQueries) $ do
-    listQueries (appArgs ^. appArgsQueryLibrary)
-    exitSuccess
-
-  case appArgs ^. appArgsSaveQuery of
-    Just name -> do
-      query <- calculateQuery appArgs
-      saveQuery (appArgs ^. appArgsQueryLibrary) name query
-      exitSuccess
-    Nothing -> pure ()
-
-  case appArgs ^. appArgsDeleteQuery of
-    Just name -> do
-      deleteQuery (appArgs ^. appArgsQueryLibrary) name
-      exitSuccess
-    Nothing -> pure ()
-
-  -- If we just want to show the query, do that and exit
-  when (appArgs ^. appArgsShowQueryOnly) $ do
-    query <- calculateQuery appArgs
-    TIO.putStrLn query
-    exitSuccess
-
+handleRunCommand :: FastLogger -> RunArgs -> Maybe FilePath -> IO ()
+handleRunCommand fastLogger runArgs globalLibPath = do
+  let queryLibPath = runArgs ^. runArgsQueryLibrary <|> globalLibPath
+  
   -- For actual query execution, validate required parameters
-  logGroupsArg <- case appArgs ^. appArgsLogGroups of
+  logGroupsArg <- case runArgs ^. runArgsLogGroups of
     Nothing -> do
       TIO.hPutStrLn stderr "Error: Log groups specification is required for query execution"
       exitFailure
     Just lgs -> pure lgs
 
-  timeRange <- case appArgs ^. appArgsTimeRange of
+  timeRange <- case runArgs ^. runArgsTimeRange of
     Nothing -> do
       TIO.hPutStrLn stderr "Error: Time range specification is required for query execution"
       exitFailure
@@ -280,15 +343,15 @@ mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
       pure lgs
 
   let (queryStart, queryEnd) = calculateQueryStartEnd now timeRange
-      limit = calculateLimit appArgs
+      limit = calculateLimitFromRunArgs runArgs
 
-  query <- calculateQuery appArgs
+  query <- calculateQueryFromRunArgs runArgs queryLibPath
 
   let awsQuery = buildQuery limit lgs queryStart queryEnd query
 
   printPreFlightInfo env tz (queryStart, queryEnd) lgs limit query
 
-  unless (appArgs ^. appArgsDryRun) . AWS.runResourceT $ do
+  unless (runArgs ^. runArgsDryRun) . AWS.runResourceT $ do
     liftIO $ TIO.hPutStrLn stderr "---------------------------"
     mresult <- executeQuery env awsQuery
     for_ mresult $ \result -> do
@@ -301,6 +364,33 @@ mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
       liftIO $ do
         hFlush stdout
         TIO.hPutStrLn stderr $ "---------------------------\nStatistics:\n" +| fmap formatQueryStats stats |+ "\n---------------------------"
+
+handleLibraryCommand :: LibraryArgs -> Maybe FilePath -> IO ()
+handleLibraryCommand libArgs globalLibPath = do
+  let queryLibPath = libArgs ^. libraryArgsQueryLibrary <|> globalLibPath
+  
+  case libArgs ^. libraryArgsOperation of
+    ListQueries -> do
+      listQueries queryLibPath
+      exitSuccess
+    SaveQuery name queryArg -> do
+      query <- calculateQueryFromArg queryArg queryLibPath
+      saveQuery queryLibPath name query
+      exitSuccess
+    DeleteQuery name -> do
+      deleteQuery queryLibPath name
+      exitSuccess
+    ShowQuery name -> do
+      query <- calculateQueryFromArg (QueryLibrary name) queryLibPath
+      TIO.putStrLn query
+      exitSuccess
+
+handleQueryShowCommand :: QueryShowArgs -> Maybe FilePath -> IO ()
+handleQueryShowCommand queryArgs globalLibPath = do
+  let queryLibPath = queryArgs ^. queryShowArgsQueryLibrary <|> globalLibPath
+  query <- calculateQueryFromArg (queryArgs ^. queryShowArgsQuery) queryLibPath
+  TIO.putStrLn query
+  exitSuccess
 
 calculateLogGroups :: AWS.Env -> LogGroupsArg -> IO (Maybe (NonEmpty Text))
 calculateLogGroups _ (CommaLogGroups lgs) = pure (Just lgs)
@@ -326,11 +416,29 @@ calculateQueryStartEnd now timeRange =
     TimeRangeAbsolute s e -> (zonedTimeToUTC s, maybe now zonedTimeToUTC e)
     TimeRangeRelative d -> (addUTCTime (negate . fromInteger @NominalDiffTime . read $ formatTime defaultTimeLocale "%s" d) now, now)
 
-calculateLimit :: AppArgs -> Maybe Natural
-calculateLimit appArgs =
-  appArgs ^. appArgsLimit <&> \case
+calculateLimitFromRunArgs :: RunArgs -> Maybe Natural
+calculateLimitFromRunArgs runArgs =
+  runArgs ^. runArgsLimit <&> \case
     MaxLimit -> 10000
     ExplicitLimit x -> x
+
+calculateQueryFromRunArgs :: RunArgs -> Maybe FilePath -> IO Text
+calculateQueryFromRunArgs runArgs queryLibPath = 
+  calculateQueryFromArg (runArgs ^. runArgsQuery) queryLibPath
+
+calculateQueryFromArg :: QueryArg -> Maybe FilePath -> IO Text
+calculateQueryFromArg queryArg queryLibPath = case queryArg of
+  QueryString q -> pure q
+  QueryFile f -> TIO.readFile f
+  QueryLibrary name -> do
+    let defaultDir = "~/.ciqt/queries"
+    libPath <- maybe defaultDir id <$> pure queryLibPath
+    expandedPath <- expandTilde libPath
+    let queryPath = expandedPath </> Text.unpack name <> ".query"
+    exists <- doesFileExist queryPath
+    if exists
+      then TIO.readFile queryPath
+      else fail $ "Query '" ++ Text.unpack name ++ "' not found in library: " ++ expandedPath
 
 -- | Expand ~ in file paths to the user's home directory
 expandTilde :: FilePath -> IO FilePath
@@ -340,19 +448,6 @@ expandTilde path = case path of
     return $ home </> rest
   _ -> return path
 
-calculateQuery :: AppArgs -> IO Text
-calculateQuery appArgs = case appArgs ^. appArgsQuery of
-  QueryString q -> pure q
-  QueryFile f -> TIO.readFile f
-  QueryLibrary name -> do
-    let defaultDir = "~/.ciqt/queries"
-    libPath <- maybe defaultDir id <$> pure (appArgs ^. appArgsQueryLibrary)
-    expandedPath <- expandTilde libPath
-    let queryPath = expandedPath </> Text.unpack name <> ".query"
-    exists <- doesFileExist queryPath
-    if exists
-      then TIO.readFile queryPath
-      else fail $ "Query '" ++ Text.unpack name ++ "' not found in library: " ++ expandedPath
 
 buildQuery :: Maybe Natural -> NonEmpty Text -> UTCTime -> UTCTime -> Text -> Logs.StartQuery
 buildQuery n lgs qstart qend q =

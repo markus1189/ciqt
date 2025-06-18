@@ -9,6 +9,8 @@ A command-line utility for executing and retrieving CloudWatch Insights queries 
 ## Features
 
 - Execute CloudWatch Insights queries directly from the command line
+- Sub-command structure for organized functionality (`run`, `library`, `query`)
+- Query library system for saving and reusing common queries
 - Multiple ways to specify log groups:
   - Comma-separated list of log group names
   - Pattern matching (substring search)
@@ -25,50 +27,106 @@ A command-line utility for executing and retrieving CloudWatch Insights queries 
 ## Usage
 
 ```
-ciqt [OPTIONS]
+ciqt [COMMAND] [OPTIONS]
 ```
 
-### Options
+### Commands
 
-#### Query Specification
+#### `ciqt run` - Execute CloudWatch Insights Queries
+
+Execute queries against CloudWatch Logs. This is the default command when no sub-command is specified.
+
+```
+ciqt run [OPTIONS]
+ciqt [OPTIONS]  # Equivalent (backward compatibility)
+```
+
+**Options:**
 - `--query TEXT` - Specify the CloudWatch Insights query directly
 - `--query-file FILE` - Path to a file containing the query
-
-#### Time Range
+- `--query-name NAME` - Use a saved query from your library
 - `--start TIME` - Start time in ISO8601 format
 - `--end TIME` - End time in ISO8601 format (defaults to current time if omitted)
 - `--since DURATION` - Relative time range (ISO8601 duration format)
-
-#### Log Group Selection
 - `--log-groups LOG_GROUPS` - Comma-separated list of log group names
 - `--log-group-pattern PATTERN` - Match log groups by case-sensitive substring
 - `--log-group-prefix PREFIX` - Match log groups by case-sensitive prefix
-- `--log-group-glob GLOB` - Match log groups using glob pattern (retrieves all log groups first)
-- `--log-group-regex REGEX` - Match log groups using PCRE regex (retrieves all log groups first)
-
-#### Result Limiting
+- `--log-group-glob GLOB` - Match log groups using glob pattern
+- `--log-group-regex REGEX` - Match log groups using PCRE regex
 - `--limit N` - Limit the number of results returned
 - `--limit-max` - Use maximum limit for results from AWS (10,000)
-
-#### Other Options
 - `--dry-run` - Print arguments and query without executing
-- `--help` - Show help message
+- `--query-library DIR` - Path to query library directory
+
+#### `ciqt library` - Manage Query Library
+
+Manage your collection of saved queries.
+
+##### `ciqt library list`
+List all available queries in your library.
+
+```
+ciqt library list [--query-library DIR]
+```
+
+##### `ciqt library save <name>`
+Save a query to your library.
+
+```
+ciqt library save <name> [--query TEXT | --query-file FILE | --query-name NAME] [--query-library DIR]
+```
+
+##### `ciqt library delete <name>`
+Delete a query from your library.
+
+```
+ciqt library delete <name> [--query-library DIR]
+```
+
+##### `ciqt library show <name>`
+Display the content of a saved query.
+
+```
+ciqt library show <name> [--query-library DIR]
+```
+
+#### `ciqt query` - Show Query Content
+
+Display query content without execution.
+
+```
+ciqt query [--query TEXT | --query-file FILE | --query-name NAME] [--query-library DIR]
+```
 
 ### Examples
 
+#### Running Queries
+
 Query the last hour of logs from a specific log group:
-```
-cloudwatch-insights-query --log-groups /aws/lambda/my-function --since PT1H --query "fields @timestamp, @message | sort @timestamp desc"
+```bash
+ciqt run --log-groups /aws/lambda/my-function --since PT1H --query "fields @timestamp, @message | sort @timestamp desc"
 ```
 
 Query logs with a specific pattern across multiple log groups:
-```
-cloudwatch-insights-query --log-group-prefix /aws/lambda/ --start 2023-01-01T00:00:00Z --end 2023-01-02T00:00:00Z --query "fields @timestamp, @message | filter @message like 'ERROR'"
+```bash
+ciqt run --log-group-prefix /aws/lambda/ --start 2023-01-01T00:00:00Z --end 2023-01-02T00:00:00Z --query "fields @timestamp, @message | filter @message like 'ERROR'"
 ```
 
 Load a query from a file and execute in dry-run mode:
+```bash
+ciqt run --log-group-pattern api-gateway --query-file ./my-query.txt --dry-run
 ```
-cloudwatch-insights-query --log-group-pattern api-gateway --query-file ./my-query.txt --dry-run
+
+Use a saved query from your library:
+```bash
+ciqt run --query-name aws/lambda/errors --log-groups /aws/lambda/my-function --since PT24H
+```
+
+#### Backward Compatibility
+
+All existing commands work without the `run` sub-command:
+```bash
+ciqt --log-groups /aws/lambda/my-function --since PT1H --query "fields @timestamp, @message"
 ```
 
 ## Output
@@ -82,11 +140,73 @@ The tool outputs:
 - AWS credentials configured (via environment variables, AWS profile, etc.)
 - Appropriate IAM permissions for CloudWatch Logs access
 
-## Query Library
+#### Managing Library Queries
 
-The tool supports maintaining a library of saved queries for easy reuse.
+##### Listing All Queries
 
-### Library Structure
+View all available queries in your library:
+
+```bash
+ciqt library list
+```
+
+This displays queries organized by their directory structure.
+
+##### Saving Queries
+
+Save a query to your library:
+
+```bash
+ciqt library save errors --query "fields @timestamp, @message | filter @message like 'ERROR'"
+```
+
+Save to a subdirectory (directories are created automatically):
+
+```bash
+ciqt library save aws/lambda/errors --query "fields @timestamp, @message | filter @message like 'ERROR'"
+```
+
+Save from a file:
+
+```bash
+ciqt library save my-query --query-file ./my-query.txt
+```
+
+##### Viewing Library Queries
+
+Display the content of a saved query:
+
+```bash
+ciqt library show errors
+```
+
+This works with queries in subdirectories too:
+
+```bash
+ciqt library show aws/lambda/errors
+```
+
+Alternatively, use the `query` command:
+
+```bash
+ciqt query --query-name aws/lambda/errors
+```
+
+##### Deleting Queries
+
+Remove a query from your library:
+
+```bash
+ciqt library delete errors
+```
+
+Delete from subdirectories:
+
+```bash
+ciqt library delete aws/lambda/errors
+```
+
+### Query Library Structure
 
 By default, the query library is located at `~/.ciqt/queries/`. Each query is stored as a separate file with a `.query` extension. The library supports organizing queries in subdirectories for better management.
 
@@ -104,81 +224,7 @@ Example library structure:
     └── startup.query
 ```
 
-### Using Library Queries
-
-To use a query from your library:
-
-```bash
-ciqt --query-name my-query --log-groups /aws/lambda/my-function
-```
-
-For queries in subdirectories, use forward slashes:
-
-```bash
-ciqt --query-name aws/lambda/errors --log-groups /aws/lambda/my-function
-```
-
-You can specify a custom library location:
-
-```bash
-ciqt --query-name my-query --query-library /path/to/queries --log-groups /aws/lambda/my-function
-```
-
-### Viewing Library Queries
-
-To view the content of a saved query without executing it:
-
-```bash
-ciqt --query-name my-query --show-query
-```
-
-This works with queries in subdirectories too:
-
-```bash
-ciqt --query-name aws/lambda/errors --show-query
-```
-
-### Managing Library Queries
-
-#### Listing All Queries
-
-View all available queries in your library:
-
-```bash
-ciqt --list-queries
-```
-
-This displays queries organized by their directory structure.
-
-#### Saving Queries
-
-Save a query to your library:
-
-```bash
-ciqt --query "fields @timestamp, @message | filter @message like 'ERROR'" --save-query errors
-```
-
-Save to a subdirectory (directories are created automatically):
-
-```bash
-ciqt --query "fields @timestamp, @message | filter @message like 'ERROR'" --save-query aws/lambda/errors
-```
-
-#### Deleting Queries
-
-Remove a query from your library:
-
-```bash
-ciqt --delete-query errors
-```
-
-Delete from subdirectories:
-
-```bash
-ciqt --delete-query aws/lambda/errors
-```
-
-#### Manual Management
+### Manual Management
 
 You can also manually manage queries by creating text files with the `.query` extension:
 
