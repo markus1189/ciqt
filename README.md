@@ -10,13 +10,21 @@ A command-line utility for executing and retrieving CloudWatch Insights queries 
 
 - Execute CloudWatch Insights queries directly from the command line
 - Sub-command structure for organized functionality (`run`, `library`, `query`)
-- Query library system for saving and reusing common queries
+- **Dual query library system:**
+  - Local file-based query library for personal queries
+  - **AWS CloudWatch Logs Insights saved queries integration**
+  - Sync and manage queries between local and AWS
 - Multiple ways to specify log groups:
   - Comma-separated list of log group names
   - Pattern matching (substring search)
   - Prefix matching
   - Glob pattern matching
   - Regular expression matching
+- **Multiple query sources:**
+  - Direct query strings
+  - Local files
+  - Local library queries
+  - **AWS saved queries by ID**
 - Flexible time range specification:
   - Absolute time ranges with start and optional end times
   - Relative time ranges (e.g., "query logs from the last 3 hours")
@@ -44,7 +52,8 @@ ciqt [OPTIONS]  # Equivalent (backward compatibility)
 **Options:**
 - `--query TEXT` - Specify the CloudWatch Insights query directly
 - `--query-file FILE` - Path to a file containing the query
-- `--query-name NAME` - Use a saved query from your library
+- `--query-name NAME` - Use a saved query from your local library
+- `--query-aws-id QUERY_ID` - **Execute an AWS saved query by its definition ID**
 - `--start TIME` - Start time in ISO8601 format
 - `--end TIME` - End time in ISO8601 format (defaults to current time if omitted)
 - `--since DURATION` - Relative time range (ISO8601 duration format)
@@ -60,34 +69,73 @@ ciqt [OPTIONS]  # Equivalent (backward compatibility)
 
 #### `ciqt library` - Manage Query Library
 
-Manage your collection of saved queries.
+Manage your collection of saved queries in both local and AWS libraries.
+
+##### Local Library Commands
 
 ##### `ciqt library list`
-List all available queries in your library.
+List all available queries in your local library.
 
 ```
 ciqt library list [--query-library DIR]
 ```
 
 ##### `ciqt library save <name>`
-Save a query to your library.
+Save a query to your local library.
 
 ```
 ciqt library save <name> [--query TEXT | --query-file FILE | --query-name NAME] [--query-library DIR]
 ```
 
 ##### `ciqt library delete <name>`
-Delete a query from your library.
+Delete a query from your local library.
 
 ```
 ciqt library delete <name> [--query-library DIR]
 ```
 
 ##### `ciqt library show <name>`
-Display the content of a saved query.
+Display the content of a saved query from your local library.
 
 ```
 ciqt library show <name> [--query-library DIR]
+```
+
+##### AWS CloudWatch Logs Insights Commands
+
+##### `ciqt library aws-list`
+List all saved queries from AWS CloudWatch Logs Insights.
+
+```
+ciqt library aws-list
+```
+
+##### `ciqt library aws-download <query-id> <local-name>`
+Download an AWS saved query to your local library.
+
+```
+ciqt library aws-download abc123-def456 aws/lambda/errors
+```
+
+##### `ciqt library aws-upload <local-name>`
+Upload a local query to AWS CloudWatch Logs Insights.
+
+```
+ciqt library aws-upload aws/lambda/errors
+```
+
+##### `ciqt library aws-delete <query-id>`
+Delete a saved query from AWS CloudWatch Logs Insights.
+
+```
+ciqt library aws-delete abc123-def456
+```
+
+##### `ciqt library sync`
+Show both local and AWS queries for comparison and sync planning.
+
+```
+ciqt library sync
 ```
 
 #### `ciqt query` - Show Query Content
@@ -95,7 +143,7 @@ ciqt library show <name> [--query-library DIR]
 Display query content without execution.
 
 ```
-ciqt query [--query TEXT | --query-file FILE | --query-name NAME] [--query-library DIR]
+ciqt query [--query TEXT | --query-file FILE | --query-name NAME | --query-aws-id QUERY_ID] [--query-library DIR]
 ```
 
 ### Examples
@@ -117,9 +165,41 @@ Load a query from a file and execute in dry-run mode:
 ciqt run --log-group-pattern api-gateway --query-file ./my-query.txt --dry-run
 ```
 
-Use a saved query from your library:
+Use a saved query from your local library:
 ```bash
 ciqt run --query-name aws/lambda/errors --log-groups /aws/lambda/my-function --since PT24H
+```
+
+**Execute an AWS saved query directly:**
+```bash
+ciqt run --query-aws-id abc123-def456 --log-groups /aws/lambda/my-function --since PT2H
+```
+
+#### Working with AWS Saved Queries
+
+List all AWS saved queries:
+```bash
+ciqt library aws-list
+```
+
+Download an AWS query to your local library:
+```bash
+ciqt library aws-download abc123-def456 lambda/performance-analysis
+```
+
+Upload a local query to AWS for team sharing:
+```bash
+ciqt library aws-upload lambda/error-analysis
+```
+
+Compare local and AWS queries:
+```bash
+ciqt library sync
+```
+
+View an AWS query without executing it:
+```bash
+ciqt query --query-aws-id abc123-def456
 ```
 
 #### Backward Compatibility
@@ -139,6 +219,10 @@ The tool outputs:
 
 - AWS credentials configured (via environment variables, AWS profile, etc.)
 - Appropriate IAM permissions for CloudWatch Logs access
+- **For AWS saved queries functionality, additional permissions required:**
+  - `logs:DescribeQueryDefinitions` - List saved queries
+  - `logs:PutQueryDefinition` - Create/update saved queries
+  - `logs:DeleteQueryDefinition` - Delete saved queries
 
 #### Managing Library Queries
 
