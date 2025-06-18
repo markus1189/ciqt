@@ -88,19 +88,39 @@ The tool supports maintaining a library of saved queries for easy reuse.
 
 ### Library Structure
 
-By default, the query library is located at `~/.ciqt/queries/`. Each query is stored as a separate file with a `.query` extension.
+By default, the query library is located at `~/.ciqt/queries/`. Each query is stored as a separate file with a `.query` extension. The library supports organizing queries in subdirectories for better management.
+
+Example library structure:
+```
+~/.ciqt/queries/
+├── errors.query
+├── aws/
+│   ├── lambda/
+│   │   ├── errors.query
+│   │   └── performance.query
+│   └── api-gateway/
+│       └── latency.query
+└── application/
+    └── startup.query
+```
 
 ### Using Library Queries
 
 To use a query from your library:
 
-```
+```bash
 ciqt --query-name my-query --log-groups /aws/lambda/my-function
+```
+
+For queries in subdirectories, use forward slashes:
+
+```bash
+ciqt --query-name aws/lambda/errors --log-groups /aws/lambda/my-function
 ```
 
 You can specify a custom library location:
 
-```
+```bash
 ciqt --query-name my-query --query-library /path/to/queries --log-groups /aws/lambda/my-function
 ```
 
@@ -108,22 +128,64 @@ ciqt --query-name my-query --query-library /path/to/queries --log-groups /aws/la
 
 To view the content of a saved query without executing it:
 
-```
+```bash
 ciqt --query-name my-query --show-query
 ```
 
-This will display the query content and exit without connecting to AWS.
+This works with queries in subdirectories too:
+
+```bash
+ciqt --query-name aws/lambda/errors --show-query
+```
 
 ### Managing Library Queries
 
-To add queries to your library, simply create text files with the `.query` extension in your query library directory:
+#### Listing All Queries
 
-```
-mkdir -p ~/.ciqt/queries
-echo "fields @timestamp, @message | filter @message like 'ERROR'" > ~/.ciqt/queries/errors.query
+View all available queries in your library:
+
+```bash
+ciqt --list-queries
 ```
 
-You can organize queries in subdirectories for better management.
+This displays queries organized by their directory structure.
+
+#### Saving Queries
+
+Save a query to your library:
+
+```bash
+ciqt --query "fields @timestamp, @message | filter @message like 'ERROR'" --save-query errors
+```
+
+Save to a subdirectory (directories are created automatically):
+
+```bash
+ciqt --query "fields @timestamp, @message | filter @message like 'ERROR'" --save-query aws/lambda/errors
+```
+
+#### Deleting Queries
+
+Remove a query from your library:
+
+```bash
+ciqt --delete-query errors
+```
+
+Delete from subdirectories:
+
+```bash
+ciqt --delete-query aws/lambda/errors
+```
+
+#### Manual Management
+
+You can also manually manage queries by creating text files with the `.query` extension:
+
+```bash
+mkdir -p ~/.ciqt/queries/aws/lambda
+echo "fields @timestamp, @message | filter @message like 'ERROR'" > ~/.ciqt/queries/aws/lambda/errors.query
+```
 
 ## Notes
 

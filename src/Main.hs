@@ -22,7 +22,7 @@ import Control.Applicative ((<|>))
 import Control.Lens (view, (%~))
 import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
-import Control.Monad (unless, when, void)
+import Control.Monad (unless, when)
 import Control.Monad.Catch (MonadCatch, SomeException, bracket, try)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Fail (FailT, runFailT)
@@ -40,7 +40,7 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.List.Split (splitOn)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
@@ -79,8 +79,8 @@ import Options.Applicative
   )
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath.Glob (Pattern, compDefault, tryCompileWith)
-import System.Directory (doesFileExist, getHomeDirectory, createDirectoryIfMissing)
-import System.FilePath ((</>), takeDirectory)
+import System.Directory (doesFileExist, getHomeDirectory, createDirectoryIfMissing, listDirectory, doesDirectoryExist, removeFile)
+import System.FilePath ((</>), takeDirectory, takeExtension, dropExtension, makeRelative)
 import System.FilePath.Glob qualified as Glob
 import System.IO (hFlush, stderr, stdout)
 import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
@@ -109,11 +109,14 @@ data QueryArg = QueryFile FilePath | QueryString Text | QueryLibrary Text derivi
 data AppArgs = AppArgs
   { _appArgsQuery :: QueryArg,
     _appArgsLimit :: Maybe Limit,
-    _appArgsTimeRange :: TimeRange,
-    _appArgsLogGroups :: LogGroupsArg,
+    _appArgsTimeRange :: Maybe TimeRange,
+    _appArgsLogGroups :: Maybe LogGroupsArg,
     _appArgsDryRun :: Bool,
     _appArgsQueryLibrary :: Maybe FilePath,
-    _appArgsShowQueryOnly :: Bool
+    _appArgsShowQueryOnly :: Bool,
+    _appArgsListQueries :: Bool,
+    _appArgsSaveQuery :: Maybe Text,
+    _appArgsDeleteQuery :: Maybe Text
   }
   deriving (Show)
 
@@ -124,14 +127,23 @@ appArgsParser =
   AppArgs
     <$> (queryFileParser <|> queryStringParser <|> queryLibraryParser)
     <*> limitParser
-    <*> (timeRangeAbsolute <|> timeRangeRelative)
-    <*> logGroupsParser
+    <*> optional (timeRangeAbsolute <|> timeRangeRelative)
+    <*> optional logGroupsParser
     <*> switch (long "dry-run" <> help "Print arguments and query, but don't start it")
     <*> optional (strOption 
           (long "query-library" 
           <> metavar "DIR" 
           <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
     <*> switch (long "show-query" <> help "Only show the query content without executing it")
+    <*> switch (long "list-queries" <> help "List all available queries in the library")
+    <*> optional (strOption 
+          (long "save-query" 
+          <> metavar "NAME" 
+          <> help "Save the current query to the library with the given name"))
+    <*> optional (strOption 
+          (long "delete-query" 
+          <> metavar "NAME" 
+          <> help "Delete a query from the library"))
   where
     timeRangeAbsolute =
       TimeRangeAbsolute
@@ -218,25 +230,56 @@ mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
   let opts = info (appArgsParser <**> helper) (fullDesc <> progDesc "Execute cloudwatch insights log queries")
   appArgs <- execParser opts
 
+  -- Handle query library operations first
+  when (appArgs ^. appArgsListQueries) $ do
+    listQueries (appArgs ^. appArgsQueryLibrary)
+    exitSuccess
+
+  case appArgs ^. appArgsSaveQuery of
+    Just name -> do
+      query <- calculateQuery appArgs
+      saveQuery (appArgs ^. appArgsQueryLibrary) name query
+      exitSuccess
+    Nothing -> pure ()
+
+  case appArgs ^. appArgsDeleteQuery of
+    Just name -> do
+      deleteQuery (appArgs ^. appArgsQueryLibrary) name
+      exitSuccess
+    Nothing -> pure ()
+
   -- If we just want to show the query, do that and exit
   when (appArgs ^. appArgsShowQueryOnly) $ do
     query <- calculateQuery appArgs
     TIO.putStrLn query
     exitSuccess
 
+  -- For actual query execution, validate required parameters
+  logGroupsArg <- case appArgs ^. appArgsLogGroups of
+    Nothing -> do
+      TIO.hPutStrLn stderr "Error: Log groups specification is required for query execution"
+      exitFailure
+    Just lgs -> pure lgs
+
+  timeRange <- case appArgs ^. appArgsTimeRange of
+    Nothing -> do
+      TIO.hPutStrLn stderr "Error: Time range specification is required for query execution"
+      exitFailure
+    Just tr -> pure tr
+
   tz <- getCurrentTimeZone
   now <- liftIO getCurrentTime
   env <- discoverAwsEnv fastLogger
 
-  maybeLgs <- calculateLogGroups env (appArgs ^. appArgsLogGroups)
+  maybeLgs <- calculateLogGroups env logGroupsArg
   lgs <- case maybeLgs of
     Nothing -> do
-      fastLogger . toLogStr @Text $ "Could not find any log groups from " +| show (appArgs ^. appArgsLogGroups) |+ ""
+      fastLogger . toLogStr @Text $ "Could not find any log groups from " +| show logGroupsArg |+ ""
       exitFailure
     Just lgs ->
       pure lgs
 
-  let (queryStart, queryEnd) = calculateQueryStartEnd now appArgs
+  let (queryStart, queryEnd) = calculateQueryStartEnd now timeRange
       limit = calculateLimit appArgs
 
   query <- calculateQuery appArgs
@@ -277,9 +320,9 @@ calculateLogGroups env (LogNameRegex (_, regex)) = AWS.runResourceT $ do
   let filtered = filter (\lg -> maybe False (match regex . Text.unpack) (lg ^. logGroup_logGroupName)) lgs
   pure $ NonEmpty.nonEmpty . mapMaybe (view logGroup_logGroupName) $ filtered
 
-calculateQueryStartEnd :: UTCTime -> AppArgs -> (UTCTime, UTCTime)
-calculateQueryStartEnd now appArgs =
-  case appArgs ^. appArgsTimeRange of
+calculateQueryStartEnd :: UTCTime -> TimeRange -> (UTCTime, UTCTime)
+calculateQueryStartEnd now timeRange =
+  case timeRange of
     TimeRangeAbsolute s e -> (zonedTimeToUTC s, maybe now zonedTimeToUTC e)
     TimeRangeRelative d -> (addUTCTime (negate . fromInteger @NominalDiffTime . read $ formatTime defaultTimeLocale "%s" d) now, now)
 
@@ -415,3 +458,69 @@ globLogGroupName :: Pattern -> Logs.LogGroup -> Bool
 globLogGroupName p lg = case view logGroup_logGroupName lg of
   Nothing -> False
   Just n -> Glob.match p (Text.unpack n)
+
+-- Query Library Management Functions
+
+listQueries :: Maybe FilePath -> IO ()
+listQueries maybeLibPath = do
+  let defaultDir = "~/.ciqt/queries"
+  libPath <- maybe defaultDir id <$> pure maybeLibPath
+  expandedPath <- expandTilde libPath
+  exists <- doesDirectoryExist expandedPath
+  if not exists
+    then TIO.putStrLn $ "Query library directory does not exist: " <> Text.pack expandedPath
+    else do
+      queries <- findQueries expandedPath expandedPath
+      if null queries
+        then TIO.putStrLn "No queries found in library"
+        else do
+          TIO.putStrLn $ "Queries in " <> Text.pack expandedPath <> ":"
+          mapM_ (TIO.putStrLn . ("  " <>)) queries
+
+findQueries :: FilePath -> FilePath -> IO [Text]
+findQueries basePath currentPath = do
+  contents <- listDirectory currentPath
+  (dirs, files) <- partitionM (\name -> doesDirectoryExist (currentPath </> name)) contents
+  let queryFiles = filter isQueryFile files
+      relativePaths = map (Text.pack . makeRelative basePath . (currentPath </>)) queryFiles
+      relativePathsWithoutExt = map (Text.pack . dropExtension . Text.unpack) relativePaths
+  
+  subQueries <- concat <$> mapM (findQueries basePath . (currentPath </>)) dirs
+  pure $ relativePathsWithoutExt ++ subQueries
+  where
+    isQueryFile name = takeExtension name == ".query"
+
+partitionM :: (a -> IO Bool) -> [a] -> IO ([a], [a])
+partitionM _ [] = pure ([], [])
+partitionM f (x:xs) = do
+  result <- f x
+  (trues, falses) <- partitionM f xs
+  if result
+    then pure (x : trues, falses)
+    else pure (trues, x : falses)
+
+saveQuery :: Maybe FilePath -> Text -> Text -> IO ()
+saveQuery maybeLibPath name queryText = do
+  let defaultDir = "~/.ciqt/queries"
+  libPath <- maybe defaultDir id <$> pure maybeLibPath
+  expandedPath <- expandTilde libPath
+  let queryPath = expandedPath </> Text.unpack name <> ".query"
+      queryDir = takeDirectory queryPath
+  
+  createDirectoryIfMissing True queryDir
+  TIO.writeFile queryPath queryText
+  TIO.putStrLn $ "Query saved as: " <> Text.pack (makeRelative expandedPath queryPath)
+
+deleteQuery :: Maybe FilePath -> Text -> IO ()
+deleteQuery maybeLibPath name = do
+  let defaultDir = "~/.ciqt/queries"
+  libPath <- maybe defaultDir id <$> pure maybeLibPath
+  expandedPath <- expandTilde libPath
+  let queryPath = expandedPath </> Text.unpack name <> ".query"
+  
+  exists <- doesFileExist queryPath
+  if not exists
+    then TIO.putStrLn $ "Query not found: " <> name
+    else do
+      removeFile queryPath
+      TIO.putStrLn $ "Query deleted: " <> name

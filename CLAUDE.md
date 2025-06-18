@@ -40,4 +40,9 @@ The project uses standard amazonka packages from nixpkgs. The `package.yaml` spe
 
 ## Query Library
 
-The tool supports a query library system where users can save commonly used queries as `.query` files in `~/.ciqt/queries/` (or custom directory). Queries are referenced by name and loaded dynamically.
+The tool supports a comprehensive query library system:
+- Queries stored as `.query` files in `~/.ciqt/queries/` (or custom directory)
+- Directory tree organization supported (e.g., `aws/lambda/errors.query`)
+- Query management via CLI: `--list-queries`, `--save-query`, `--delete-query`
+- Queries referenced by path: `--query-name aws/lambda/errors`
+- Library operations work independently of time/log group parameters
