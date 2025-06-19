@@ -12,12 +12,13 @@ import Amazonka qualified as AWS
 import Amazonka.CloudWatchLogs (QueryStatus (..))
 import Amazonka.CloudWatchLogs qualified as Logs
 import Amazonka.CloudWatchLogs.GetQueryResults (getQueryResultsResponse_results, getQueryResultsResponse_statistics)
-import Amazonka.CloudWatchLogs.Lens (describeLogGroupsResponse_logGroups, describeLogGroupsResponse_nextToken, describeLogGroups_logGroupNamePattern, describeLogGroups_logGroupNamePrefix, describeLogGroups_nextToken, getQueryResultsResponse_status, logGroup_logGroupName, resultField_field, resultField_value, startQueryResponse_queryId, startQuery_limit, describeQueryDefinitionsResponse_queryDefinitions, describeQueryDefinitionsResponse_nextToken, describeQueryDefinitions_nextToken, queryDefinition_name, queryDefinition_queryDefinitionId, queryDefinition_queryString, queryDefinition_logGroupNames, putQueryDefinitionResponse_queryDefinitionId)
+import Amazonka.CloudWatchLogs.Lens (describeLogGroupsResponse_logGroups, describeLogGroupsResponse_nextToken, describeLogGroups_logGroupNamePattern, describeLogGroups_logGroupNamePrefix, describeLogGroups_nextToken, describeQueryDefinitionsResponse_nextToken, describeQueryDefinitionsResponse_queryDefinitions, describeQueryDefinitions_nextToken, getQueryResultsResponse_status, logGroup_logGroupName, putQueryDefinitionResponse_queryDefinitionId, queryDefinition_logGroupNames, queryDefinition_name, queryDefinition_queryDefinitionId, queryDefinition_queryString, resultField_field, resultField_value, startQueryResponse_queryId, startQuery_limit)
 import Amazonka.CloudWatchLogs.StartQuery (startQuery_logGroupNames)
 import Amazonka.CloudWatchLogs.StopQuery (newStopQuery)
-import Amazonka.CloudWatchLogs.Types (QueryStatistics (QueryStatistics'), ResultField, QueryDefinition, bytesScanned, recordsMatched, recordsScanned)
+import Amazonka.CloudWatchLogs.Types (QueryDefinition, QueryStatistics (QueryStatistics'), ResultField, bytesScanned, recordsMatched, recordsScanned)
 import Amazonka.Prelude (mapMaybe)
 import Control.Applicative ((<|>))
+import Control.Exception.Lens (trying)
 import Control.Lens (view, (%~))
 import Control.Lens.Operators ((&), (.~), (<&>), (?~), (^.))
 import Control.Lens.TH (makeLenses)
@@ -81,15 +82,14 @@ import Options.Applicative
     value,
     (<**>),
   )
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getHomeDirectory, listDirectory, removeFile)
 import System.Exit (exitFailure, exitSuccess)
+import System.FilePath (dropExtension, makeRelative, takeDirectory, takeExtension, (</>))
 import System.FilePath.Glob (Pattern, compDefault, tryCompileWith)
-import System.Directory (doesFileExist, getHomeDirectory, createDirectoryIfMissing, listDirectory, doesDirectoryExist, removeFile)
-import System.FilePath ((</>), takeDirectory, takeExtension, dropExtension, makeRelative)
 import System.FilePath.Glob qualified as Glob
 import System.IO (hFlush, stderr, stdout)
 import System.Log.FastLogger (FastLogger, LogType' (LogStderr), ToLogStr (toLogStr), defaultBufSize, withFastLogger)
 import Text.Regex.PCRE (Regex, RegexContext (match), RegexMaker (makeRegexM))
-import Control.Exception.Lens (trying)
 
 data LogGroupsArg
   = CommaLogGroups (NonEmpty Text)
@@ -127,10 +127,10 @@ data LibraryOperation
   | DeleteQuery Text
   | ShowQuery Text
   | ListAWSQueries
-  | DownloadAWSQuery Text Text  -- AWS query ID, local name
-  | UploadQuery Text            -- local name to upload to AWS
-  | DeleteAWSQuery Text         -- AWS query ID
-  | SyncQueries                 -- sync between local and AWS
+  | DownloadAWSQuery Text Text -- AWS query ID, local name
+  | UploadQuery Text -- local name to upload to AWS
+  | DeleteAWSQuery Text -- AWS query ID
+  | SyncQueries -- sync between local and AWS
   deriving (Show)
 
 data LibraryArgs = LibraryArgs
@@ -163,151 +163,236 @@ makeLenses ''QueryShowArgs
 makeLenses ''AppArgs
 
 appArgsParser :: Parser AppArgs
-appArgsParser = AppArgs
-  <$> commandParser
-  <*> optional (strOption
-        (long "query-library"
-        <> metavar "DIR"
-        <> help "Global path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+appArgsParser =
+  AppArgs
+    <$> commandParser
+    <*> optional
+      ( strOption
+          ( long "query-library"
+              <> metavar "DIR"
+              <> help "Global path to directory containing saved queries (defaults to ~/.ciqt/queries)"
+          )
+      )
 
 commandParser :: Parser Command
-commandParser = subparser
-  ( command "run" (info (RunCommand <$> runArgsParser <**> helper)
-      (progDesc "Execute CloudWatch Insights queries against specified log groups and time ranges"))
-  <> command "library" (info (LibraryCommand <$> libraryArgsParser <**> helper)
-      (progDesc "Manage saved queries in your query library (~/.ciqt/queries by default)"))
-  <> command "query" (info (QueryShowCommand <$> queryArgsParser <**> helper)
-      (progDesc "Display query content without execution (useful for validation)"))
-  ) <|> RunCommand <$> runArgsParser  -- Default to run command for backward compatibility
+commandParser =
+  subparser
+    ( command
+        "run"
+        ( info
+            (RunCommand <$> runArgsParser <**> helper)
+            (progDesc "Execute CloudWatch Insights queries against specified log groups and time ranges")
+        )
+        <> command
+          "library"
+          ( info
+              (LibraryCommand <$> libraryArgsParser <**> helper)
+              (progDesc "Manage saved queries in your query library (~/.ciqt/queries by default)")
+          )
+        <> command
+          "query"
+          ( info
+              (QueryShowCommand <$> queryArgsParser <**> helper)
+              (progDesc "Display query content without execution (useful for validation)")
+          )
+    )
+    <|> RunCommand <$> runArgsParser -- Default to run command for backward compatibility
 
 runArgsParser :: Parser RunArgs
-runArgsParser = RunArgs
-  <$> queryArgParser
-  <*> limitParser
-  <*> optional timeRangeParser
-  <*> optional logGroupsParser
-  <*> switch (long "dry-run" <> help "Print query details and arguments without executing the query")
-  <*> optional (strOption
-        (long "query-library"
-        <> metavar "DIR"
-        <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+runArgsParser =
+  RunArgs
+    <$> queryArgParser
+    <*> limitParser
+    <*> optional timeRangeParser
+    <*> optional logGroupsParser
+    <*> switch (long "dry-run" <> help "Print query details and arguments without executing the query")
+    <*> optional
+      ( strOption
+          ( long "query-library"
+              <> metavar "DIR"
+              <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"
+          )
+      )
 
 libraryArgsParser :: Parser LibraryArgs
-libraryArgsParser = LibraryArgs
-  <$> libraryOperationParser
-  <*> optional (strOption
-        (long "query-library"
-        <> metavar "DIR"
-        <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+libraryArgsParser =
+  LibraryArgs
+    <$> libraryOperationParser
+    <*> optional
+      ( strOption
+          ( long "query-library"
+              <> metavar "DIR"
+              <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"
+          )
+      )
 
 libraryOperationParser :: Parser LibraryOperation
-libraryOperationParser = subparser
-  ( command "list" (info (pure ListQueries <**> helper)
-      (progDesc "List all available queries in the library with directory structure"))
-  <> command "save" (info (saveQueryParser <**> helper)
-      (progDesc "Save a query to the library (supports nested directories like 'aws/lambda/errors')"))
-  <> command "delete" (info (deleteQueryParser <**> helper)
-      (progDesc "Delete a saved query from the library"))
-  <> command "show" (info (showQueryParser <**> helper)
-      (progDesc "Display the content of a saved query without executing it"))
-  <> command "aws-list" (info (pure ListAWSQueries <**> helper)
-      (progDesc "List all saved queries from AWS CloudWatch Logs Insights"))
-  <> command "aws-download" (info (downloadAWSQueryParser <**> helper)
-      (progDesc "Download an AWS saved query to local library"))
-  <> command "aws-upload" (info (uploadQueryParser <**> helper)
-      (progDesc "Upload a local query to AWS CloudWatch Logs Insights"))
-  <> command "aws-delete" (info (deleteAWSQueryParser <**> helper)
-      (progDesc "Delete a saved query from AWS CloudWatch Logs Insights"))
-  <> command "sync" (info (pure SyncQueries <**> helper)
-      (progDesc "Sync queries between local library and AWS"))
-  )
+libraryOperationParser =
+  subparser
+    ( command
+        "list"
+        ( info
+            (pure ListQueries <**> helper)
+            (progDesc "List all available queries in the library with directory structure")
+        )
+        <> command
+          "save"
+          ( info
+              (saveQueryParser <**> helper)
+              (progDesc "Save a query to the library (supports nested directories like 'aws/lambda/errors')")
+          )
+        <> command
+          "delete"
+          ( info
+              (deleteQueryParser <**> helper)
+              (progDesc "Delete a saved query from the library")
+          )
+        <> command
+          "show"
+          ( info
+              (showQueryParser <**> helper)
+              (progDesc "Display the content of a saved query without executing it")
+          )
+        <> command
+          "aws-list"
+          ( info
+              (pure ListAWSQueries <**> helper)
+              (progDesc "List all saved queries from AWS CloudWatch Logs Insights")
+          )
+        <> command
+          "aws-download"
+          ( info
+              (downloadAWSQueryParser <**> helper)
+              (progDesc "Download an AWS saved query to local library")
+          )
+        <> command
+          "aws-upload"
+          ( info
+              (uploadQueryParser <**> helper)
+              (progDesc "Upload a local query to AWS CloudWatch Logs Insights")
+          )
+        <> command
+          "aws-delete"
+          ( info
+              (deleteAWSQueryParser <**> helper)
+              (progDesc "Delete a saved query from AWS CloudWatch Logs Insights")
+          )
+        <> command
+          "sync"
+          ( info
+              (pure SyncQueries <**> helper)
+              (progDesc "Sync queries between local library and AWS")
+          )
+    )
 
 saveQueryParser :: Parser LibraryOperation
-saveQueryParser = SaveQuery
-  <$> strArgument (metavar "NAME" <> help "Name/path to save the query as (e.g., 'aws/lambda/errors')")
-  <*> queryArgParser
+saveQueryParser =
+  SaveQuery
+    <$> strArgument (metavar "NAME" <> help "Name/path to save the query as (e.g., 'aws/lambda/errors')")
+    <*> queryArgParser
 
 deleteQueryParser :: Parser LibraryOperation
-deleteQueryParser = DeleteQuery
-  <$> strArgument (metavar "NAME" <> help "Name/path of query to delete (e.g., 'aws/lambda/errors')")
+deleteQueryParser =
+  DeleteQuery
+    <$> strArgument (metavar "NAME" <> help "Name/path of query to delete (e.g., 'aws/lambda/errors')")
 
 showQueryParser :: Parser LibraryOperation
-showQueryParser = ShowQuery
-  <$> strArgument (metavar "NAME" <> help "Name/path of query to display (e.g., 'aws/lambda/errors')")
+showQueryParser =
+  ShowQuery
+    <$> strArgument (metavar "NAME" <> help "Name/path of query to display (e.g., 'aws/lambda/errors')")
 
 downloadAWSQueryParser :: Parser LibraryOperation
-downloadAWSQueryParser = DownloadAWSQuery
-  <$> strArgument (metavar "QUERY_ID" <> help "AWS query definition ID to download")
-  <*> strArgument (metavar "LOCAL_NAME" <> help "Local name to save the query as (e.g., 'aws/lambda/errors')")
+downloadAWSQueryParser =
+  DownloadAWSQuery
+    <$> strArgument (metavar "QUERY_ID" <> help "AWS query definition ID to download")
+    <*> strArgument (metavar "LOCAL_NAME" <> help "Local name to save the query as (e.g., 'aws/lambda/errors')")
 
 uploadQueryParser :: Parser LibraryOperation
-uploadQueryParser = UploadQuery
-  <$> strArgument (metavar "LOCAL_NAME" <> help "Local query name to upload to AWS (e.g., 'aws/lambda/errors')")
+uploadQueryParser =
+  UploadQuery
+    <$> strArgument (metavar "LOCAL_NAME" <> help "Local query name to upload to AWS (e.g., 'aws/lambda/errors')")
 
 deleteAWSQueryParser :: Parser LibraryOperation
-deleteAWSQueryParser = DeleteAWSQuery
-  <$> strArgument (metavar "QUERY_ID" <> help "AWS query definition ID to delete")
+deleteAWSQueryParser =
+  DeleteAWSQuery
+    <$> strArgument (metavar "QUERY_ID" <> help "AWS query definition ID to delete")
 
 queryArgsParser :: Parser QueryShowArgs
-queryArgsParser = QueryShowArgs
-  <$> queryArgParser
-  <*> optional (strOption
-        (long "query-library"
-        <> metavar "DIR"
-        <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"))
+queryArgsParser =
+  QueryShowArgs
+    <$> queryArgParser
+    <*> optional
+      ( strOption
+          ( long "query-library"
+              <> metavar "DIR"
+              <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"
+          )
+      )
 
 queryArgParser :: Parser QueryArg
 queryArgParser = queryFileParser <|> queryStringParser <|> queryLibraryParser <|> queryAWSParser
   where
-    queryFileParser = QueryFile
-      <$> strOption
-        ( long "query-file"
-            <> metavar "FILE"
-            <> help "Path to a file containing a CloudWatch Insights query"
-        )
+    queryFileParser =
+      QueryFile
+        <$> strOption
+          ( long "query-file"
+              <> metavar "FILE"
+              <> help "Path to a file containing a CloudWatch Insights query"
+          )
 
-    queryStringParser = QueryString
-      <$> strOption
-        ( long "query"
-            <> metavar "QUERY"
-            <> help "CloudWatch Insights query string to execute"
-            <> showDefault
-            <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
-        )
+    queryStringParser =
+      QueryString
+        <$> strOption
+          ( long "query"
+              <> metavar "QUERY"
+              <> help "CloudWatch Insights query string to execute"
+              <> showDefault
+              <> value "fields @timestamp, @message, @logStream, @log | sort @timestamp desc"
+          )
 
-    queryLibraryParser = QueryLibrary
-      <$> strOption
-        ( long "query-name"
-            <> metavar "NAME"
-            <> help "Name/path of saved query from library (e.g., 'aws/lambda/errors')"
-        )
+    queryLibraryParser =
+      QueryLibrary
+        <$> strOption
+          ( long "query-name"
+              <> metavar "NAME"
+              <> help "Name/path of saved query from library (e.g., 'aws/lambda/errors')"
+          )
 
-    queryAWSParser = QueryAWS
-      <$> strOption
-        ( long "query-aws-id"
-            <> metavar "QUERY_ID"
-            <> help "AWS CloudWatch Logs Insights saved query definition ID"
-        )
+    queryAWSParser =
+      QueryAWS
+        <$> strOption
+          ( long "query-aws-id"
+              <> metavar "QUERY_ID"
+              <> help "AWS CloudWatch Logs Insights saved query definition ID"
+          )
 
 timeRangeParser :: Parser TimeRange
 timeRangeParser = timeRangeAbsolute <|> timeRangeRelative
   where
-    timeRangeAbsolute = TimeRangeAbsolute
-      <$> option (maybeReader (formatParseM iso8601Format))
+    timeRangeAbsolute =
+      TimeRangeAbsolute
+        <$> option
+          (maybeReader (formatParseM iso8601Format))
           (long "start" <> metavar "TIME" <> help "Query start time in ISO8601 format (e.g., 2023-01-01T00:00:00Z)")
-      <*> optional (option (maybeReader (formatParseM iso8601Format))
-          (long "end" <> metavar "TIME" <> help "Query end time in ISO8601 format (defaults to current time)"))
+        <*> optional
+          ( option
+              (maybeReader (formatParseM iso8601Format))
+              (long "end" <> metavar "TIME" <> help "Query end time in ISO8601 format (defaults to current time)")
+          )
 
-    timeRangeRelative = TimeRangeRelative
-      <$> option (maybeReader (formatParseM iso8601Format))
+    timeRangeRelative =
+      TimeRangeRelative
+        <$> option
+          (maybeReader (formatParseM iso8601Format))
           (long "since" <> metavar "ISO8601_DURATION" <> help "Query time range as ISO8601 duration (e.g., P1D for 1 day, PT1H for 1 hour)")
 
 limitParser :: Parser (Maybe Limit)
-limitParser = optional
-  ( ExplicitLimit
-      <$> option auto (long "limit" <> metavar "POSINT" <> help "Maximum number of log entries to return")
-      <|> MaxLimit <$ switch (long "limit-max" <> help "Use maximum limit (10,000) for results from AWS")
-  )
+limitParser =
+  optional
+    ( ExplicitLimit
+        <$> option auto (long "limit" <> metavar "POSINT" <> help "Maximum number of log entries to return")
+        <|> MaxLimit <$ switch (long "limit-max" <> help "Use maximum limit (10,000) for results from AWS")
+    )
 
 logGroupsParser :: Parser LogGroupsArg
 logGroupsParser =
@@ -352,12 +437,14 @@ discoverAwsEnv logger = do
 
 mainProgram :: IO ()
 mainProgram = withFastLogger (LogStderr defaultBufSize) $ \fastLogger -> do
-  let opts = info (appArgsParser <**> helper)
-        ( fullDesc
-        <> progDesc "Execute and manage CloudWatch Insights queries with flexible log group selection and time ranges"
-        <> header "ciqt - CloudWatch Insights Query Tool"
-        <> footer "Examples:\n  ciqt run --query 'fields @timestamp, @message | limit 10' --log-groups '/aws/lambda/my-function' --start 2023-01-01T00:00:00Z\n  ciqt library list\n  ciqt library save my-query --query 'fields @timestamp | limit 100'"
-        )
+  let opts =
+        info
+          (appArgsParser <**> helper)
+          ( fullDesc
+              <> progDesc "Execute and manage CloudWatch Insights queries with flexible log group selection and time ranges"
+              <> header "ciqt - CloudWatch Insights Query Tool"
+              <> footer "Examples:\n  ciqt run --query 'fields @timestamp, @message | limit 10' --log-groups '/aws/lambda/my-function' --start 2023-01-01T00:00:00Z\n  ciqt library list\n  ciqt library save my-query --query 'fields @timestamp | limit 100'"
+          )
   appArgs <- execParser opts
 
   case appArgs ^. appArgsCommand of
@@ -524,11 +611,10 @@ calculateQueryFromArg queryArg queryLibPath = case queryArg of
 -- | Expand ~ in file paths to the user's home directory
 expandTilde :: FilePath -> IO FilePath
 expandTilde path = case path of
-  '~':'/':rest -> do
+  '~' : '/' : rest -> do
     home <- getHomeDirectory
     return $ home </> rest
   _ -> return path
-
 
 buildQuery :: Maybe Natural -> NonEmpty Text -> UTCTime -> UTCTime -> Text -> Logs.StartQuery
 buildQuery n lgs qstart qend q =
@@ -668,7 +754,7 @@ findQueries basePath currentPath = do
 
 partitionM :: (a -> IO Bool) -> [a] -> IO ([a], [a])
 partitionM _ [] = pure ([], [])
-partitionM f (x:xs) = do
+partitionM f (x : xs) = do
   result <- f x
   (trues, falses) <- partitionM f xs
   if result
@@ -719,9 +805,10 @@ listAWSQueries env = AWS.runResourceT $ do
           logGroups = fromMaybe [] (qdef ^. queryDefinition_logGroupNames)
       TIO.putStrLn $ "  " <> queryId <> ": " <> name
       unless (null logGroups) $
-        TIO.putStrLn $ "    Log Groups: " <> Text.intercalate ", " logGroups
+        TIO.putStrLn $
+          "    Log Groups: " <> Text.intercalate ", " logGroups
 
-describeAllAWSQueries :: (MonadResource m) => AWS.Env -> Maybe Text -> m [QueryDefinition]  
+describeAllAWSQueries :: (MonadResource m) => AWS.Env -> Maybe Text -> m [QueryDefinition]
 describeAllAWSQueries env nextToken = do
   let query = Logs.newDescribeQueryDefinitions & describeQueryDefinitions_nextToken .~ nextToken
   res <- AWS.send env query
@@ -738,7 +825,7 @@ getAWSQueryById env queryId = AWS.runResourceT $ do
   queries <- describeAllAWSQueries env Nothing
   case filter (\q -> (q ^. queryDefinition_queryDefinitionId) == Just queryId) queries of
     [] -> liftIO $ fail $ "AWS query not found: " ++ Text.unpack queryId
-    (q:_) -> case q ^. queryDefinition_queryString of
+    (q : _) -> case q ^. queryDefinition_queryString of
       Nothing -> liftIO $ fail $ "AWS query has no query string: " ++ Text.unpack queryId
       Just queryStr -> pure queryStr
 
@@ -767,7 +854,7 @@ deleteAWSQuery env queryId = AWS.runResourceT $ do
 syncQueries :: AWS.Env -> Maybe FilePath -> IO ()
 syncQueries env queryLibPath = do
   TIO.putStrLn "Syncing queries between local library and AWS..."
-  
+
   -- List both local and AWS queries
   localQueries <- do
     let defaultDir = "~/.ciqt/queries"
@@ -777,21 +864,23 @@ syncQueries env queryLibPath = do
     if exists
       then findQueries expandedPath expandedPath
       else pure []
-  
+
   awsQueries <- AWS.runResourceT $ describeAllAWSQueries env Nothing
-  
+
   TIO.putStrLn $ "Found " <> Text.pack (show (length localQueries)) <> " local queries"
   TIO.putStrLn $ "Found " <> Text.pack (show (length awsQueries)) <> " AWS queries"
-  
+
   -- For now, just list both - full sync would be more complex
   unless (null localQueries) $ do
     TIO.putStrLn "\nLocal queries:"
     mapM_ (TIO.putStrLn . ("  " <>)) localQueries
-  
+
   unless (null awsQueries) $ do
     TIO.putStrLn "\nAWS queries:"
-    mapM_ (\q -> do
-      let queryId = fromMaybe "<no-id>" (q ^. queryDefinition_queryDefinitionId)
-          name = fromMaybe "<no-name>" (q ^. queryDefinition_name)
-      TIO.putStrLn $ "  " <> queryId <> ": " <> name
-      ) awsQueries
+    mapM_
+      ( \q -> do
+          let queryId = fromMaybe "<no-id>" (q ^. queryDefinition_queryDefinitionId)
+              name = fromMaybe "<no-name>" (q ^. queryDefinition_name)
+          TIO.putStrLn $ "  " <> queryId <> ": " <> name
+      )
+      awsQueries
