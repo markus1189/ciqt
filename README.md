@@ -29,6 +29,8 @@ nix build
 ./result/bin/ciqt --help
 ```
 
+**Note**: The project migrated from hpack (package.yaml) to Cabal for better Nix integration and modular architecture support.
+
 ## Features
 
 - Execute CloudWatch Insights queries directly from the command line
@@ -349,11 +351,12 @@ echo "fields @timestamp, @message | filter @message like 'ERROR'" > ~/.ciqt/quer
 - **Language**: Haskell with functional programming paradigm
 - **Build System**: Nix flakes for reproducible builds and development environments
 - **AWS Integration**: Uses amazonka library (≥ 2.0) with comprehensive resource management
-- **Architecture**: Single-file application (887 lines) with sophisticated type system
+- **Architecture**: Modular library design with 7 focused modules and minimal executable wrapper
 - **Resource Management**: Automatic cleanup of AWS resources and graceful shutdown handling
 
 ### Key Design Principles
 
+- **Modular architecture**: Clean separation of concerns across focused modules
 - **Immutable coding style**: Functional approach with minimal side effects
 - **Lens-heavy architecture**: Elegant data manipulation with compile-time safety
 - **Resource safety**: Automatic cleanup using ResourceT and bracket patterns

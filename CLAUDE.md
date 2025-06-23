@@ -7,7 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is `ciqt` (CloudWatch Insights Query Tool) - a sophisticated Haskell command-line utility for executing and retrieving CloudWatch Insights queries with flexible log group selection and time range options.
 
 ### Technical Architecture
-- **Single-file application**: 887 lines of functional Haskell code in `src/Main.hs`
+- **Modular library design**: Clean separation into 7 focused modules with minimal executable wrapper
+- **Module structure**: 
+  - `Ciqt.Types`: Core data types and domain models (110 lines)
+  - `Ciqt.CLI`: Command-line interface and argument parsing (260 lines)
+  - `Ciqt.AWS`: AWS SDK integration and CloudWatch operations (250 lines)
+  - `Ciqt.Query`: Query execution and result processing (130 lines)
+  - `Ciqt.Library`: Local query library management (70 lines)
+  - `Ciqt.Utils`: Pure utility functions and helpers (120 lines)
+  - `Ciqt`: Main orchestration and command dispatching (180 lines)
+  - `Main`: Minimal 3-line executable wrapper
 - **Functional paradigm**: Immutable coding style with lens-heavy architecture
 - **Type-safe design**: Comprehensive ADT modeling of domain concepts
 - **Resource management**: Advanced ResourceT and bracket patterns for AWS cleanup
@@ -24,7 +33,7 @@ This project uses Nix for build management:
 - `nix run . -- <args>` - Run the built binary with arguments
 - `nix shell` - Add ciqt to PATH temporarily
 
-The project uses `package.yaml` (hpack format) instead of traditional `.cabal` files.
+The project uses Cabal (`.cabal` file) for package configuration, having migrated from hpack (`package.yaml`) for better Nix integration and modular architecture support.
 
 ### Code Formatting
 
@@ -41,7 +50,8 @@ Currently no formal test suite is configured. Testing is done through:
 ## Architecture Overview
 
 ### Design Principles
-- **Single-file application**: All logic is in `src/Main.hs`
+- **Modular architecture**: Clean separation of concerns across focused modules
+- **Library + executable pattern**: Core functionality in library, minimal executable wrapper
 - **Immutable coding style**: Functional approach with minimal side effects
 - **Lens-heavy**: Extensive use of lens operators for data manipulation
 - **Resource management**: Proper cleanup of AWS queries and resources
@@ -257,7 +267,7 @@ case result of
 ### Common Modification Patterns
 
 **Adding New Command-Line Options:**
-1. **Update Data Types** (lines 114-158):
+1. **Update Data Types** in `src/Ciqt/Types.hs`:
    ```haskell
    data RunArgs = RunArgs
      { _runArgsNewOption :: Maybe NewType  -- Add new field
@@ -265,44 +275,44 @@ case result of
      }
    ```
 
-2. **Add Lens Generation**:
+2. **Add Lens Generation** in `src/Ciqt/Types.hs`:
    ```haskell
    makeLenses ''RunArgs  -- Automatically generates lenses
    ```
 
-3. **Update Argument Parser** (lines 201-215):
+3. **Update Argument Parser** in `src/Ciqt/CLI.hs`:
    ```haskell
    runArgsParser = RunArgs
      <$> existingParsers
      <*> optional newOptionParser
    ```
 
-4. **Use in Main Logic**:
+4. **Use in Main Logic** in `src/Ciqt.hs`:
    ```haskell
    let newValue = args ^. runArgs . runArgsNewOption
    ```
 
 **Adding New Log Group Selection Methods:**
-1. **Extend LogGroupsArg ADT** (lines 94-99):
+1. **Extend LogGroupsArg ADT** in `src/Ciqt/Types.hs`:
    ```haskell
    data LogGroupsArg = 
      | ExistingConstructors
      | NewLogGroupMethod NewType
    ```
 
-2. **Update Show instance** (lines 101-106)
-3. **Extend calculateLogGroups function** with new pattern matching
-4. **Add corresponding CLI parser**
+2. **Update Show instance** in `src/Ciqt/Types.hs`
+3. **Extend calculateLogGroups function** in `src/Ciqt/AWS.hs` with new pattern matching
+4. **Add corresponding CLI parser** in `src/Ciqt/CLI.hs`
 
 **Adding New Query Sources:**
-1. **Extend QueryArg ADT** (line 112):
+1. **Extend QueryArg ADT** in `src/Ciqt/Types.hs`:
    ```haskell
    data QueryArg = 
      | ExistingConstructors
      | NewQuerySource NewType
    ```
 
-2. **Update calculateQuery function** with new pattern matching
+2. **Update calculateQuery function** in `src/Ciqt/Query.hs` with new pattern matching
 3. **Add error handling for new source type**
 
 **Resource Management Guidelines:**
@@ -336,7 +346,7 @@ case result of
 - **Dependency conflicts**: Use `nix flake update` to update flake.lock if builds fail
 - **GHC version mismatch**: The flake pins to a specific nixpkgs revision for consistency
 - **Missing dependencies**: All 29 required packages are managed by Nix
-- **ormolu formatting**: Run `nix develop --command ormolu --mode inplace src/Main.hs`
+- **ormolu formatting**: Run `nix develop --command ormolu --mode inplace src/**/*.hs` to format all modules
 
 **AWS Integration Issues:**
 - **Authentication failures**: Check credential chain with `aws sts get-caller-identity`
@@ -377,19 +387,20 @@ ls -la ~/.ciqt/queries/
 nix develop --command ghcid
 
 # Load in GHCi for interactive testing
-nix develop --command ghci src/Main.hs
+nix develop --command ghci  # Will load all modules
 
 # Check code formatting
-nix develop --command ormolu --mode check src/Main.hs
+nix develop --command ormolu --mode check src/**/*.hs
 ```
 
 ### Architecture-Specific Guidelines
 
-**Single-File Architecture Considerations:**
-- **Pros**: Simple deployment, no module boundaries, easy to understand
-- **Cons**: Large file size (887 lines), potential complexity growth
-- **Guidelines**: Keep related functionality grouped, use clear section comments
-- **Future**: Consider module splitting if file exceeds 1000 lines
+**Modular Architecture Benefits:**
+- **Pros**: Improved maintainability, faster compilation, better testability, easier debugging
+- **Clear boundaries**: Each module has focused responsibilities and clean interfaces
+- **Separation of concerns**: Pure functions separated from IO operations and AWS integration
+- **Testability**: Individual modules can be tested in isolation
+- **Development workflow**: Faster incremental compilation and clearer error messages
 
 **Lens Architecture Benefits:**
 - **Elegant composition**: Chain operations with `&` operator
