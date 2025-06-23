@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is `ciqt` (CloudWatch Insights Query Tool) - a Haskell command-line utility for executing and retrieving CloudWatch Insights queries with flexible log group selection and time range options.
+This is `ciqt` (CloudWatch Insights Query Tool) - a sophisticated Haskell command-line utility for executing and retrieving CloudWatch Insights queries with flexible log group selection and time range options.
+
+### Technical Architecture
+- **Single-file application**: 887 lines of functional Haskell code in `src/Main.hs`
+- **Functional paradigm**: Immutable coding style with lens-heavy architecture
+- **Type-safe design**: Comprehensive ADT modeling of domain concepts
+- **Resource management**: Advanced ResourceT and bracket patterns for AWS cleanup
+- **Monadic architecture**: Strategic use of monad transformers (ResourceT, IO, FailT)
 
 ## Development Setup
 
@@ -52,24 +59,97 @@ Currently no formal test suite is configured. Testing is done through:
 - `QueryArg`: Query source (file, string, library, or AWS saved query)
 - `AppArgs`: Main application configuration with global options
 
-### Core Functions
-- `calculateLogGroups`: Resolves log group specifications to actual log group names
-- `executeQuery`: Handles query execution with proper resource cleanup and retry logic
-- `calculateQuery`: Loads query text from various sources (file, library, direct string, AWS)
-- `mainProgram`: Entry point with error handling and command routing
+### Core Functions and Architecture Patterns
+
+**Query Resolution Pipeline:**
+```haskell
+calculateLogGroups :: AWS.Env -> LogGroupsArg -> IO (Maybe (NonEmpty Text))
+-- Resolves 5 different log group selection methods:
+-- CommaLogGroups, LogNamePattern, LogNamePrefix, LogNameGlob, LogNameRegex
+```
+
+**Query Execution with Resource Management:**
+```haskell
+executeQuery :: AWS.Env -> Logs.StartQuery -> ResourceT IO (Maybe Logs.GetQueryResultsResponse)
+-- Features:
+-- - Automatic AWS resource cleanup using bracket pattern
+-- - 30-minute timeout with 2-second polling intervals
+-- - Graceful query cancellation on SIGINT
+-- - Real-time progress statistics
+```
+
+**Query Source Abstraction:**
+```haskell
+calculateQuery :: QueryArg -> Maybe FilePath -> IO Text
+-- Unified interface for 4 query sources:
+-- QueryFile, QueryString, QueryLibrary, QueryAWS
+```
+
+**Main Program Architecture:**
+```haskell
+mainProgram :: IO ()
+-- Top-level orchestration with:
+-- - Comprehensive exception handling
+-- - AWS environment discovery
+-- - Command routing and execution
+-- - Proper exit code management
+```
 
 ## AWS Integration
 
 ### Dependencies
-The project uses standard amazonka packages from nixpkgs:
-- `amazonka-core` - Core AWS functionality
-- `amazonka-cloudwatch-logs` - CloudWatch Logs API bindings
-- The `package.yaml` specifies minimum versions (`>= 2.0`) for compatibility
+The project uses 29 carefully selected Haskell packages:
 
-### Authentication
-- Uses standard AWS credential chain (environment variables, profiles, IAM roles)
-- Automatically discovers AWS environment through `amazonka`
-- Supports all standard AWS authentication methods
+**Core AWS Integration:**
+- `amazonka >= 2.0` - Modern AWS SDK with comprehensive CloudWatch Logs support
+- `amazonka-core >= 2.0` - Core AWS functionality with automatic credential discovery
+- `amazonka-cloudwatch-logs >= 2.0` - CloudWatch Logs API bindings
+
+**Functional Programming Infrastructure:**
+- `lens` - Lens operators for elegant data manipulation (`^.`, `.~`, `?~`, `&`)
+- `lens-aeson` - JSON manipulation through lens interface
+- `optparse-applicative` - Sophisticated command-line argument parsing
+- `resourcet` - Resource management and automatic cleanup
+- `retry` - Exponential backoff and retry logic for AWS operations
+
+**Domain-Specific Libraries:**
+- `Glob` - Shell-style pattern matching for log group selection
+- `regex-pcre` - Full PCRE regex support for advanced log group filtering
+- `fmt` + `formatting` - Human-readable output formatting with number localization
+- `fast-logger` - High-performance structured logging
+- `neat-interpolation` - Clean multi-line string literals
+
+**Utility Libraries:**
+- `aeson` - JSON parsing and generation
+- `time` - Comprehensive time handling with ISO8601 support
+- `either` - Enhanced Either operations
+- `exceptions` - Exception handling with MonadCatch
+- `split` - List manipulation utilities
+
+### Authentication and AWS Integration
+
+**Environment Discovery:**
+```haskell
+discoverAwsEnv :: (MonadIO m, MonadCatch m) => FastLogger -> m AWS.Env
+-- Automatic credential discovery with integrated logging
+-- Supports: env vars, profiles, IAM roles, instance metadata
+```
+
+**AWS Integration Patterns:**
+- **Credential chain**: Standard AWS credential discovery with fallbacks
+- **Region handling**: Automatic region detection from environment
+- **Logging integration**: Custom FastLogger bridge for AWS SDK logging
+- **Error handling**: Comprehensive AWS exception catching and user-friendly error messages
+- **Pagination**: Proper handling of AWS API pagination for large result sets
+
+**Required IAM Permissions:**
+```json
+{
+  "logs:StartQuery", "logs:GetQueryResults", "logs:StopQuery",
+  "logs:DescribeLogGroups", "logs:DescribeQueryDefinitions",
+  "logs:PutQueryDefinition", "logs:DeleteQueryDefinition"
+}
+```
 
 ### Query Library System
 
@@ -94,44 +174,276 @@ The tool supports a comprehensive query library system:
 
 ## Development Workflow
 
-### Common Development Tasks
+### Development Environment Setup
 
-1. **Building and Testing**:
+1. **Enter Development Shell**:
    ```bash
-   nix build                           # Build the project
-   nix run . -- --help                # Test basic functionality
-   nix run . -- library list          # Test library functionality
+   nix develop                         # Full development environment
+   nix develop --command ghci          # Direct GHCi with all dependencies
    ```
 
-2. **Development Shell**:
+2. **Development Tools Available**:
+   - `haskell-language-server` - LSP support for editors
+   - `ghcid` - Fast feedback during development
+   - `cabal-install` - Package management
+   - `ormolu` - Code formatting
+   - `withHoogle` - Local documentation server
+
+### Code Development Patterns
+
+**Lens-Heavy Development:**
+```haskell
+-- Reading with lens operators
+runArgs ^. runArgsQuery              -- Extract query
+runArgs ^. runArgsTimeRange . _Just  -- Extract optional time range
+
+-- Writing with lens operators
+env & AWS.logger .~ customLogger     -- Set logger
+query & startQuery_limit ?~ n        -- Maybe set limit
+args & runArgsLogGroups .~ Just lgs  -- Set log groups
+```
+
+**Resource Management Patterns:**
+```haskell
+-- Standard bracket pattern for AWS resources
+bracket
+  (AWS.send env startQuery)          -- Acquire
+  (\resp -> AWS.send env (stopQuery (resp ^. startQueryResponse_queryId))) -- Release
+  (\resp -> pollForResults env resp)  -- Use
+```
+
+**Error Handling Patterns:**
+```haskell
+-- Top-level exception handling
+result <- try @_ @SomeException $ action
+case result of
+  Left err -> do
+    TIO.hPutStrLn stderr ("Error: " <> tshow err)
+    exitFailure
+  Right value -> pure value
+```
+
+### Testing and Validation
+
+1. **Unit Testing**:
    ```bash
-   nix develop                         # Enter dev environment
-   ghci                               # Start GHCi REPL
-   ormolu --mode inplace src/Main.hs  # Format code
+   # Test basic functionality
+   nix run . -- --help
+   nix run . -- query --query-name non-existent  # Test error handling
    ```
 
-3. **Testing Different Features**:
+2. **Integration Testing** (requires AWS credentials):
    ```bash
-   # Test query execution (requires AWS credentials)
-   nix run . -- run --query 'fields @timestamp | limit 10' --log-groups '/aws/lambda/test' --since PT1H
+   # Test query execution
+   nix run . -- --query 'fields @timestamp | limit 5' --log-groups '/aws/lambda/test' --since PT1H --dry-run
    
-   # Test library management
-   nix run . -- library save test-query --query 'fields @timestamp'
+   # Test library operations
+   nix run . -- library save test --query 'fields @timestamp'
    nix run . -- library list
+   nix run . -- library show test
+   nix run . -- library delete test
    ```
 
-### Troubleshooting
+3. **Performance Testing**:
+   ```bash
+   # Test with large result sets
+   nix run . -- --query 'fields @timestamp' --limit-max --log-groups '/aws/lambda/high-volume'
+   
+   # Test log group discovery performance
+   nix run . -- --log-group-pattern 'api' --dry-run  # Should be fast
+   nix run . -- --log-group-regex '.*' --dry-run     # May be slow
+   ```
 
-- **Build failures**: Check that all dependencies are available in nixpkgs
-- **AWS authentication**: Verify AWS credentials are configured (`aws sts get-caller-identity`)
-- **Query library**: Ensure `~/.ciqt/queries/` directory exists and is writable
-- **Completion scripts**: The flake generates completion scripts but they're not essential for functionality
+### Common Modification Patterns
 
-### Common Modifications
+**Adding New Command-Line Options:**
+1. **Update Data Types** (lines 114-158):
+   ```haskell
+   data RunArgs = RunArgs
+     { _runArgsNewOption :: Maybe NewType  -- Add new field
+     , ... existing fields
+     }
+   ```
 
-When making changes:
-1. Update types in the data definitions section if changing CLI structure
-2. Update parsers when adding new command-line options
-3. Use lens operators consistently for data access
-4. Maintain resource cleanup patterns for AWS operations
-5. Follow the existing error handling patterns with `ExitFailure`
+2. **Add Lens Generation**:
+   ```haskell
+   makeLenses ''RunArgs  -- Automatically generates lenses
+   ```
+
+3. **Update Argument Parser** (lines 201-215):
+   ```haskell
+   runArgsParser = RunArgs
+     <$> existingParsers
+     <*> optional newOptionParser
+   ```
+
+4. **Use in Main Logic**:
+   ```haskell
+   let newValue = args ^. runArgs . runArgsNewOption
+   ```
+
+**Adding New Log Group Selection Methods:**
+1. **Extend LogGroupsArg ADT** (lines 94-99):
+   ```haskell
+   data LogGroupsArg = 
+     | ExistingConstructors
+     | NewLogGroupMethod NewType
+   ```
+
+2. **Update Show instance** (lines 101-106)
+3. **Extend calculateLogGroups function** with new pattern matching
+4. **Add corresponding CLI parser**
+
+**Adding New Query Sources:**
+1. **Extend QueryArg ADT** (line 112):
+   ```haskell
+   data QueryArg = 
+     | ExistingConstructors
+     | NewQuerySource NewType
+   ```
+
+2. **Update calculateQuery function** with new pattern matching
+3. **Add error handling for new source type**
+
+**Resource Management Guidelines:**
+- Always use `bracket` for AWS resource acquisition/cleanup
+- Implement proper exception handling with `try`
+- Use `ResourceT` for complex resource management scenarios
+- Follow the existing pattern of cleanup functions that stop running queries
+
+**Lens Usage Best Practices:**
+- Use `^.` for reading values
+- Use `.~` for setting values
+- Use `?~` for setting Maybe values
+- Use `&` for chaining operations
+- Use `%~` for transforming values
+
+**Error Handling Standards:**
+- Use `ExitFailure` with specific exit codes
+- Send user-friendly messages to stderr
+- Log technical details with FastLogger
+- Always handle AWS exceptions gracefully
+
+**Performance Considerations:**
+- Use `NonEmpty` for guaranteed non-empty lists
+- Stream results to stdout to avoid memory accumulation
+- Implement proper pagination for AWS API calls
+- Use lazy evaluation where appropriate (Text, ByteString)
+
+### Troubleshooting and Common Issues
+
+**Build and Development Issues:**
+- **Dependency conflicts**: Use `nix flake update` to update flake.lock if builds fail
+- **GHC version mismatch**: The flake pins to a specific nixpkgs revision for consistency
+- **Missing dependencies**: All 29 required packages are managed by Nix
+- **ormolu formatting**: Run `nix develop --command ormolu --mode inplace src/Main.hs`
+
+**AWS Integration Issues:**
+- **Authentication failures**: Check credential chain with `aws sts get-caller-identity`
+- **Region issues**: Set `AWS_DEFAULT_REGION` or ensure credentials include region
+- **Permission errors**: Verify IAM permissions for CloudWatch Logs operations
+- **Query timeout**: 30-minute hard limit - check for resource-intensive queries
+- **Rate limiting**: AWS may throttle API calls - implement backoff if needed
+
+**Performance Issues:**
+- **Slow log group discovery**: Use specific log group names or prefixes instead of patterns/regex
+- **Large result sets**: Consider using `--limit` or more specific queries
+- **Memory usage**: Results are streamed but very large queries may still consume memory
+
+**Query Library Issues:**
+- **Directory permissions**: Ensure `~/.ciqt/queries/` is writable
+- **File extension**: Query files must have `.query` extension
+- **Path resolution**: Check tilde expansion works in your environment
+- **AWS sync conflicts**: Local and AWS query names must be unique
+
+**Runtime Debugging:**
+```bash
+# Enable AWS debug logging
+export AWS_LOG_LEVEL=debug
+
+# Test with dry-run first
+nix run . -- --dry-run --query 'test' --log-groups 'test'
+
+# Verify AWS connectivity
+aws logs describe-log-groups --limit 1
+
+# Check query library
+ls -la ~/.ciqt/queries/
+```
+
+**Development Debugging:**
+```bash
+# Fast feedback during development
+nix develop --command ghcid
+
+# Load in GHCi for interactive testing
+nix develop --command ghci src/Main.hs
+
+# Check code formatting
+nix develop --command ormolu --mode check src/Main.hs
+```
+
+### Architecture-Specific Guidelines
+
+**Single-File Architecture Considerations:**
+- **Pros**: Simple deployment, no module boundaries, easy to understand
+- **Cons**: Large file size (887 lines), potential complexity growth
+- **Guidelines**: Keep related functionality grouped, use clear section comments
+- **Future**: Consider module splitting if file exceeds 1000 lines
+
+**Lens Architecture Benefits:**
+- **Elegant composition**: Chain operations with `&` operator
+- **Type safety**: Compile-time verification of field access
+- **Readability**: Clear intent with operators like `^.` and `.~`
+- **Maintainability**: Easy refactoring when data structures change
+
+**Functional Programming Patterns:**
+- **Immutability**: All data structures are immutable by default
+- **Pure functions**: Separate pure logic from IO operations
+- **Monad composition**: Use monadic chains for sequential operations
+- **Error handling**: Prefer Either/Maybe over exceptions for pure code
+
+**Resource Management Philosophy:**
+- **Acquire-Release**: Always pair resource acquisition with cleanup
+- **Exception safety**: Use bracket patterns for guaranteed cleanup
+- **Timeout handling**: All AWS operations have bounded execution time
+- **Graceful shutdown**: Handle interruption signals properly
+
+### Extension Points for New Features
+
+**Adding New Output Formats:**
+1. Extend result processing pipeline after query execution
+2. Add command-line options for format selection
+3. Maintain backward compatibility with JSON default
+
+**Adding New Time Range Formats:**
+1. Extend `TimeRange` ADT with new constructor
+2. Update time parsing logic
+3. Add corresponding CLI parser
+
+**Adding New Authentication Methods:**
+1. Extend AWS environment discovery function
+2. Add new credential providers to amazonka configuration
+3. Maintain fallback to standard credential chain
+
+**Adding Concurrent Query Execution:**
+1. Would require significant architectural changes
+2. Consider resource limits and AWS API throttling
+3. Implement proper resource cleanup for multiple queries
+
+### Testing Strategy
+
+**Unit Testing**: Currently no formal test suite
+- Consider property-based testing with QuickCheck for pure functions
+- Test data type parsers and transformations
+- Mock AWS operations for testing business logic
+
+**Integration Testing**: Manual testing with AWS services
+- Test against real CloudWatch Logs data
+- Verify resource cleanup under various failure conditions
+- Test with different AWS environments and regions
+
+**Performance Testing**: Manual benchmarking
+- Test with large numbers of log groups
+- Measure memory usage with large result sets
+- Profile AWS API call patterns and optimization opportunities

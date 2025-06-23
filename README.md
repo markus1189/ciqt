@@ -6,6 +6,29 @@
 
 A command-line utility for executing and retrieving CloudWatch Insights queries with flexible log group selection and time range options.
 
+**Built with Haskell** for reliability and performance, featuring a sophisticated functional architecture with comprehensive AWS integration, dual query library system, and robust resource management.
+
+## Installation
+
+### Using Nix (Recommended)
+
+```bash
+# run without installing
+nix run github:markus1189/ciqt -- --help
+
+# For development
+nix develop github:markus1189/ciqt
+```
+
+### Building from Source
+
+```bash
+git clone https://github.com/markus1189/ciqt.git
+cd ciqt
+nix build
+./result/bin/ciqt --help
+```
+
 ## Features
 
 - Execute CloudWatch Insights queries directly from the command line
@@ -31,6 +54,8 @@ A command-line utility for executing and retrieving CloudWatch Insights queries 
 - Control over result limits
 - Dry-run mode to preview query parameters without execution
 - JSON output for easy integration with other tools
+- **Robust architecture**: Functional programming with comprehensive error handling and automatic resource cleanup
+- **High performance**: Efficient streaming, memory-conscious design, and optimized AWS API usage
 
 ## Usage
 
@@ -317,7 +342,155 @@ mkdir -p ~/.ciqt/queries/aws/lambda
 echo "fields @timestamp, @message | filter @message like 'ERROR'" > ~/.ciqt/queries/aws/lambda/errors.query
 ```
 
+## Architecture
+
+### Technical Overview
+
+- **Language**: Haskell with functional programming paradigm
+- **Build System**: Nix flakes for reproducible builds and development environments
+- **AWS Integration**: Uses amazonka library (≥ 2.0) with comprehensive resource management
+- **Architecture**: Single-file application (887 lines) with sophisticated type system
+- **Resource Management**: Automatic cleanup of AWS resources and graceful shutdown handling
+
+### Key Design Principles
+
+- **Immutable coding style**: Functional approach with minimal side effects
+- **Lens-heavy architecture**: Elegant data manipulation with compile-time safety
+- **Resource safety**: Automatic cleanup using ResourceT and bracket patterns
+- **Type safety**: Strong typing with custom ADTs for domain modeling
+
+## Performance Considerations
+
+### Large-Scale Usage
+
+- **Log Group Discovery**: `--log-group-glob` and `--log-group-regex` retrieve all log groups first, which may be slow in accounts with many log groups (1000+)
+- **Query Limits**: AWS CloudWatch Insights has a maximum result limit of 10,000 rows per query
+- **Concurrent Queries**: Tool executes one query at a time with proper resource management
+- **Memory Usage**: Results are streamed to reduce memory footprint for large result sets
+
+### Optimization Tips
+
+- Use specific log group names (`--log-groups`) when possible for fastest performance
+- Use `--log-group-prefix` for efficient filtering without full log group enumeration
+- Consider `--limit` for exploratory queries to reduce execution time
+- Use `--dry-run` to validate query parameters without execution
+
+## Security
+
+### IAM Permissions
+
+**Basic CloudWatch Logs access:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery",
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+**For AWS saved queries functionality:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeQueryDefinitions",
+        "logs:PutQueryDefinition",
+        "logs:DeleteQueryDefinition"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### Best Practices
+
+- Use AWS IAM roles instead of long-term access keys when possible
+- Scope permissions to specific log groups using resource ARNs
+- Monitor CloudWatch Logs usage and costs, especially with broad log group patterns
+- Use `--dry-run` to preview queries before execution in production environments
+
+## Development
+
+### Development Environment
+
+```bash
+# Enter development shell with all dependencies
+nix develop
+
+# Start GHCi REPL with project loaded
+nix develop --command ghci
+
+# Format code
+nix develop --command ormolu --mode inplace src/Main.hs
+
+# Build and test
+nix build
+nix run . -- --help
+```
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make changes following the existing functional programming style
+4. Use `ormolu` for code formatting
+5. Test with various AWS environments
+6. Submit a pull request
+
+## Troubleshooting
+
+### Common Issues
+
+**Authentication errors:**
+```bash
+# Verify AWS credentials
+aws sts get-caller-identity
+
+# Check AWS profile
+export AWS_PROFILE=your-profile
+ciqt --help
+```
+
+**Query library issues:**
+```bash
+# Ensure library directory exists
+mkdir -p ~/.ciqt/queries
+
+# Check permissions
+ls -la ~/.ciqt/
+```
+
+**Build issues:**
+```bash
+# Clean build
+nix build --rebuild
+
+# Check Nix installation
+nix --version
+```
+
+**Performance issues:**
+- Use specific log group names instead of patterns when possible
+- Consider reducing query time ranges for initial testing
+- Use `--limit` to cap result sizes during development
+
 ## Notes
 
 - When using `--log-group-glob` or `--log-group-regex`, the tool retrieves all log groups first, which may be slow in accounts with many log groups
 - Queries can be stopped with Ctrl+C, and the tool will attempt to stop the running query on AWS
+- The tool uses a 30-minute timeout for query execution with 2-second polling intervals
+- Results are streamed to stdout as JSON, with progress information sent to stderr
