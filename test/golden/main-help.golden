@@ -1,0 +1,63 @@
+ciqt - CloudWatch Insights Query Tool
+
+Usage: ciqt [COMMAND | 
+              [--query-file FILE | --query QUERY | --query-name NAME | 
+                --query-aws-id QUERY_ID] [--limit POSINT | --limit-max] 
+              [--start TIME [--end TIME] | --since ISO8601_DURATION] 
+              [--log-groups LOG_GROUPS | --log-group-pattern PATTERN | 
+                --log-group-prefix PREFIX | --log-group-glob GLOB | 
+                --log-group-regex REGEX] [--dry-run] [--query-library DIR]] 
+            [--query-library DIR]
+
+  Execute and manage CloudWatch Insights queries with flexible log group
+  selection and time ranges
+
+Available options:
+  --query-file FILE        Path to a file containing a CloudWatch Insights query
+  --query QUERY            CloudWatch Insights query string to execute
+                           (default: "fields @timestamp, @message, @logStream, @log | sort @timestamp desc")
+  --query-name NAME        Name/path of saved query from library (e.g.,
+                           'aws/lambda/errors')
+  --query-aws-id QUERY_ID  AWS CloudWatch Logs Insights saved query definition
+                           ID
+  --limit POSINT           Maximum number of log entries to return
+  --limit-max              Use maximum limit (10,000) for results from AWS
+  --start TIME             Query start time in ISO8601 format (e.g.,
+                           2023-01-01T00:00:00Z)
+  --end TIME               Query end time in ISO8601 format (defaults to current
+                           time)
+  --since ISO8601_DURATION Query time range as ISO8601 duration (e.g., P1D for 1
+                           day, PT1H for 1 hour)
+  --log-groups LOG_GROUPS  Comma-separated list of CloudWatch log groups (e.g.,
+                           '/aws/lambda/func1,/aws/lambda/func2')
+  --log-group-pattern PATTERN
+                           Match log groups containing this substring
+                           (case-sensitive)
+  --log-group-prefix PREFIX
+                           Match log groups starting with this prefix
+                           (case-sensitive)
+  --log-group-glob GLOB    Match log groups using glob pattern (e.g.,
+                           '/aws/lambda/*' - WARNING: fetches ALL log groups
+                           first)
+  --log-group-regex REGEX  Match log groups using PCRE regex (e.g.,
+                           '/aws/lambda/.*' - WARNING: fetches ALL log groups
+                           first)
+  --dry-run                Print query details and arguments without executing
+                           the query
+  --query-library DIR      Path to directory containing saved queries (defaults
+                           to ~/.ciqt/queries)
+  --query-library DIR      Global path to directory containing saved queries
+                           (defaults to ~/.ciqt/queries)
+  -h,--help                Show this help text
+
+Available commands:
+  run                      Execute CloudWatch Insights queries against specified
+                           log groups and time ranges
+  library                  Manage saved queries in your query library
+                           (~/.ciqt/queries by default)
+  query                    Display query content without execution (useful for
+                           validation)
+
+Examples: ciqt run --query 'fields @timestamp, @message | limit 10' --log-groups
+'/aws/lambda/my-function' --start 2023-01-01T00:00:00Z ciqt library list ciqt
+library save my-query --query 'fields @timestamp | limit 100'

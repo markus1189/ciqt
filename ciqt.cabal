@@ -91,6 +91,8 @@ test-suite ciqt-test
     , filepath
     , directory
     , aeson
+    , process
+    , bytestring
   default-language: Haskell2010
   default-extensions:
     GADTs
