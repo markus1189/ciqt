@@ -38,6 +38,9 @@
             ghcid
             cabal-install
             ormolu
+            tasty
+            tasty-hunit
+            tasty-golden
           ];
         });
     };
