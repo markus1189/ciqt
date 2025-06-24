@@ -445,6 +445,48 @@ nix build
 nix run . -- --help
 ```
 
+### Testing
+
+The project includes a comprehensive test suite built with Tasty framework:
+
+```bash
+# Run all tests
+nix develop --command cabal test
+
+# Run tests with verbose output
+nix develop --command cabal test --test-show-details=streaming
+
+# Run specific test pattern  
+nix develop --command cabal test --test-options="-p expandTilde"
+```
+
+#### Test Coverage
+
+**Unit Tests (2 tests):**
+- `expandTilde utility` - Tests path expansion functionality
+- `parseNestedJson utility` - Tests JSON parsing with nested structures
+
+**Golden Tests (3 tests):**
+- `main-help-output` - Validates `ciqt --help` output consistency
+- `run-help-output` - Validates `ciqt run --help` output consistency  
+- `library-help-output` - Validates `ciqt library --help` output consistency
+
+#### Test Framework Features
+
+- **Golden Tests**: Automatically detect CLI help text changes and regressions
+- **Fast Execution**: Tests complete in ~0.5 seconds using `cabal run`
+- **Tasty Integration**: Professional test framework with parallel execution
+- **CI Ready**: Tests can be easily integrated into continuous integration
+
+#### Updating Golden Files
+
+When CLI help output intentionally changes, update golden files:
+
+```bash
+# Accept new golden file outputs
+nix develop --command cabal test --test-options="--accept"
+```
+
 ### Contributing
 
 1. Fork the repository

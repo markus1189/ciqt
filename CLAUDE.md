@@ -43,9 +43,36 @@ The project uses Cabal (`.cabal` file) for package configuration, having migrate
 
 ### Testing
 
-Currently no formal test suite is configured. Testing is done through:
-- Manual CLI testing with various argument combinations
-- Integration testing with actual AWS CloudWatch Logs
+The project uses **Tasty** framework with comprehensive test coverage:
+
+**Framework**: Tasty with tasty-hunit (unit tests) and tasty-golden (CLI regression tests)
+
+**Dependencies**: 
+- `tasty` - Main test framework
+- `tasty-hunit` - Unit testing support
+- `tasty-golden` - Golden file testing for CLI output
+- `process`, `bytestring` - Command execution and output handling
+
+**Test Structure**:
+- Test suite configuration in `ciqt.cabal` as `test-suite ciqt-test`
+- Main test runner at `test/Spec.hs`
+- Golden files stored in `test/golden/` directory
+- All tests integrated with Nix development environment
+
+**Commands**:
+```bash
+# Run all tests (fast: ~0.5 seconds)
+nix develop --command cabal test
+
+# Run with verbose output
+nix develop --command cabal test --test-show-details=streaming
+
+# Update golden files when CLI output changes
+nix develop --command cabal test --test-options="--accept"
+
+# Run specific test
+nix develop --command cabal test --test-options="-p '/main-help-output/'"
+```
 
 ## Architecture Overview
 
@@ -235,14 +262,22 @@ case result of
 
 ### Testing and Validation
 
-1. **Unit Testing**:
+1. **Automated Test Suite**:
    ```bash
-   # Test basic functionality
-   nix run . -- --help
-   nix run . -- query --query-name non-existent  # Test error handling
+   # Run all tests (fast: ~0.5 seconds)
+   nix develop --command cabal test
+   
+   # Run tests with verbose output
+   nix develop --command cabal test --test-show-details=streaming
+   
+   # Update golden files when CLI changes
+   nix develop --command cabal test --test-options="--accept"
+   
+   # Test specific components
+   nix develop --command cabal test --test-options="-p expandTilde"
    ```
 
-2. **Integration Testing** (requires AWS credentials):
+2. **Manual Integration Testing** (requires AWS credentials):
    ```bash
    # Test query execution
    nix run . -- --query 'fields @timestamp | limit 5' --log-groups '/aws/lambda/test' --since PT1H --dry-run
@@ -444,17 +479,35 @@ nix develop --command ormolu --mode check src/**/*.hs
 
 ### Testing Strategy
 
-**Unit Testing**: Currently no formal test suite
-- Consider property-based testing with QuickCheck for pure functions
-- Test data type parsers and transformations
+**Current Test Suite** (5 tests total, ~0.5s execution):
+
+**Unit Testing** (2 tests):
+- `expandTilde utility` - Tests path expansion from `Ciqt.Utils:44-53`
+- `parseNestedJson utility` - Tests JSON parsing from `Ciqt.Utils:79-83`
+
+**Golden Testing** (3 tests):
+- `main-help-output` - Validates `ciqt --help` CLI output consistency
+- `run-help-output` - Validates `ciqt run --help` CLI output consistency
+- `library-help-output` - Validates `ciqt library --help` CLI output consistency
+
+**Test Implementation**:
+```haskell
+-- test/Spec.hs uses cabal run for fast execution
+getCiqtHelpOutput :: [String] -> IO LBS.ByteString
+getCiqtHelpOutput args = do
+  (_, stdout, stderr) <- readProcessWithExitCode "cabal" (["run", "ciqt", "--"] ++ args) ""
+  let output = if null stderr then stdout else stderr
+  pure $ LBS8.pack output
+```
+
+**Benefits**:
+- **CLI Regression Protection**: Automatically catches help text changes
+- **Fast Feedback**: Sub-second execution vs previous 60+ second nix runs
+- **Real Binary Testing**: Tests actual compiled behavior vs synthetic tests
+- **CI Integration**: Ready for automated testing pipelines
+
+**Future Testing Opportunities**:
+- Property-based testing with QuickCheck for pure functions
 - Mock AWS operations for testing business logic
-
-**Integration Testing**: Manual testing with AWS services
-- Test against real CloudWatch Logs data
-- Verify resource cleanup under various failure conditions
-- Test with different AWS environments and regions
-
-**Performance Testing**: Manual benchmarking
-- Test with large numbers of log groups
-- Measure memory usage with large result sets
-- Profile AWS API call patterns and optimization opportunities
+- Integration tests with AWS services (requires credentials)
+- Performance benchmarking for log group discovery patterns
