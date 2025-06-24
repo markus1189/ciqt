@@ -8,7 +8,7 @@ This is `ciqt` (CloudWatch Insights Query Tool) - a sophisticated Haskell comman
 
 ### Technical Architecture
 - **Modular library design**: Clean separation into 7 focused modules with minimal executable wrapper
-- **Module structure**: 
+- **Module structure**:
   - `Ciqt.Types`: Core data types and domain models (110 lines)
   - `Ciqt.CLI`: Command-line interface and argument parsing (260 lines)
   - `Ciqt.AWS`: AWS SDK integration and CloudWatch operations (250 lines)
@@ -47,10 +47,10 @@ The project uses **Tasty** framework with comprehensive test coverage:
 
 **Framework**: Tasty with tasty-hunit (unit tests) and tasty-golden (CLI regression tests)
 
-**Dependencies**: 
+**Dependencies**:
 - `tasty` - Main test framework
 - `tasty-hunit` - Unit testing support
-- `tasty-golden` - Golden file testing for CLI output
+- `tasty-golden` - Golden file testing
 - `process`, `bytestring` - Command execution and output handling
 
 **Test Structure**:
@@ -67,7 +67,7 @@ nix develop --command cabal test
 # Run with verbose output
 nix develop --command cabal test --test-show-details=streaming
 
-# Update golden files when CLI output changes
+# Accept the new golden files
 nix develop --command cabal test --test-options="--accept"
 
 # Run specific test
@@ -266,13 +266,13 @@ case result of
    ```bash
    # Run all tests (fast: ~0.5 seconds)
    nix develop --command cabal test
-   
+
    # Run tests with verbose output
    nix develop --command cabal test --test-show-details=streaming
-   
-   # Update golden files when CLI changes
+
+   # Update golden files
    nix develop --command cabal test --test-options="--accept"
-   
+
    # Test specific components
    nix develop --command cabal test --test-options="-p expandTilde"
    ```
@@ -281,7 +281,7 @@ case result of
    ```bash
    # Test query execution
    nix run . -- --query 'fields @timestamp | limit 5' --log-groups '/aws/lambda/test' --since PT1H --dry-run
-   
+
    # Test library operations
    nix run . -- library save test --query 'fields @timestamp'
    nix run . -- library list
@@ -293,7 +293,7 @@ case result of
    ```bash
    # Test with large result sets
    nix run . -- --query 'fields @timestamp' --limit-max --log-groups '/aws/lambda/high-volume'
-   
+
    # Test log group discovery performance
    nix run . -- --log-group-pattern 'api' --dry-run  # Should be fast
    nix run . -- --log-group-regex '.*' --dry-run     # May be slow
@@ -330,7 +330,7 @@ case result of
 **Adding New Log Group Selection Methods:**
 1. **Extend LogGroupsArg ADT** in `src/Ciqt/Types.hs`:
    ```haskell
-   data LogGroupsArg = 
+   data LogGroupsArg =
      | ExistingConstructors
      | NewLogGroupMethod NewType
    ```
@@ -342,7 +342,7 @@ case result of
 **Adding New Query Sources:**
 1. **Extend QueryArg ADT** in `src/Ciqt/Types.hs`:
    ```haskell
-   data QueryArg = 
+   data QueryArg =
      | ExistingConstructors
      | NewQuerySource NewType
    ```
@@ -484,11 +484,6 @@ nix develop --command ormolu --mode check src/**/*.hs
 **Unit Testing** (2 tests):
 - `expandTilde utility` - Tests path expansion from `Ciqt.Utils:44-53`
 - `parseNestedJson utility` - Tests JSON parsing from `Ciqt.Utils:79-83`
-
-**Golden Testing** (3 tests):
-- `main-help-output` - Validates `ciqt --help` CLI output consistency
-- `run-help-output` - Validates `ciqt run --help` CLI output consistency
-- `library-help-output` - Validates `ciqt library --help` CLI output consistency
 
 **Test Implementation**:
 ```haskell
