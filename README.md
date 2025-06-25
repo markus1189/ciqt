@@ -34,7 +34,14 @@ nix build
 ## Features
 
 - Execute CloudWatch Insights queries directly from the command line
-- Sub-command structure for organized functionality (`run`, `library`, `query`)
+- Sub-command structure for organized functionality (`run`, `library`, `query`, `history`)
+- **Comprehensive query history tracking:**
+  - Automatic recording of all query executions with full parameters
+  - Individual JSON files per execution with SHA256 hash IDs
+  - Track execution time, status (Success/Failed/DryRun), and metadata
+  - List, show, rerun, and clear history entries
+  - Partial hash matching for easy reference
+  - Configurable history directory
 - **Dual query library system:**
   - Local file-based query library for personal queries
   - **AWS CloudWatch Logs Insights saved queries integration**
@@ -172,6 +179,43 @@ Display query content without execution.
 ```
 ciqt query [--query TEXT | --query-file FILE | --query-name NAME | --query-aws-id QUERY_ID] [--query-library DIR]
 ```
+
+#### `ciqt history` - Manage Query Execution History
+
+View and manage the history of executed queries. All query executions are automatically recorded with full parameters and results.
+
+##### `ciqt history list`
+List all history entries sorted by timestamp (newest first).
+
+```
+ciqt history list [--history-dir DIR]
+```
+
+##### `ciqt history show <hash>`
+Show detailed information about a specific history entry.
+
+```
+ciqt history show a1b2c3d4 [--history-dir DIR]
+```
+
+Supports partial hash matching - you can use just the first few characters of the hash as long as it's unique.
+
+##### `ciqt history rerun <hash>`
+Re-execute a query from history with the same parameters.
+
+```
+ciqt history rerun a1b2 [--history-dir DIR]
+```
+
+##### `ciqt history clear`
+Clear all history entries.
+
+```
+ciqt history clear [--history-dir DIR]
+```
+
+**Global Options:**
+- `--history-dir DIR` - Path to history directory (defaults to `~/.ciqt/history/`)
 
 ### Examples
 
