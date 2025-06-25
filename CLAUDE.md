@@ -477,6 +477,117 @@ nix develop --command ormolu --mode check src/**/*.hs
 2. Consider resource limits and AWS API throttling
 3. Implement proper resource cleanup for multiple queries
 
+## Development Workflow and Best Practices
+
+### Feature Development Process
+
+**1. Planning Phase:**
+- Always create a detailed `PLAN.md` file breaking down implementation into phases
+- Use clear step-by-step breakdown with specific file changes
+- Include example usage and file structure diagrams
+- Plan data types, CLI integration, and main program changes separately
+
+**2. Implementation Phase Approach:**
+- Implement in logical phases: Data Types → Core Module → CLI → Main Integration → Testing
+- Use TodoWrite tool to track progress through phases and steps
+- Complete each phase fully before moving to the next
+- Test compilation frequently during development
+
+**3. Dependency Management:**
+- Add new dependencies to `ciqt.cabal` immediately when needed
+- Update `exposed-modules` list when adding new modules
+- Common new dependencies: Add to both library `build-depends` and test suite if needed
+- For crypto: prefer `cryptohash` over newer alternatives for stability
+
+### Code Development Patterns
+
+**JSON Instance Guidelines:**
+- Always write explicit `ToJSON` and `FromJSON` instances, never derive them
+- Use `object` and `withObject` for structured JSON
+- Handle sum types with single-key objects for clarity
+- Add proper error messages in `FromJSON` parsing failures
+- Import specific functions: `(.:)`, `(.=)`, `object`, `withObject`
+
+**Data Type Development:**
+- Add `Eq` and `Show` instances explicitly for all new types
+- Add `Ord` instances when types need sorting (e.g., for `sort` function)
+- Avoid `Generic` derivation - write explicit instances instead
+- Use lens generation with `makeLenses` for record types
+- Export all lens names in module exports
+
+**Type Safety Patterns:**
+- Use specific types instead of primitives (e.g., `Limit` vs `Natural`)
+- Create custom `Eq` instances for types with complex fields (like `Regex`, `Pattern`)
+- Use string representations for comparison when needed
+- Be careful with type conversions in function calls
+
+### Build and Testing Workflow
+
+**Development Build Cycle:**
+1. `nix develop --command cabal build` - Fast development builds
+2. Fix compilation errors immediately - don't accumulate them
+3. Add files to git staging before `nix build` (nix needs tracked files)
+4. Use `nix build` for final testing of the complete package
+
+**Common Build Issues and Fixes:**
+- **Missing Ord instance**: Add explicit `Ord` instance for types used with `sort`
+- **Type mismatches**: Check function signatures carefully, especially with `Maybe` types
+- **Variable shadowing**: Use descriptive names to avoid lens/function name conflicts
+- **Missing dependencies**: Add to cabal file immediately, rebuild flake if needed
+- **Module not found in nix**: Ensure new files are git-tracked before `nix build`
+
+**Build Error Debugging:**
+- Use development builds for detailed error messages: `nix develop --command cabal build`
+- Compilation warnings often indicate runtime failures - fix them promptly
+- `nix build` gives less detailed errors - use cabal build for debugging
+
+### Nix-Specific Practices
+
+**File Management:**
+- Always `git add` new source files before running `nix build`
+- Nix ignores untracked files even if they're referenced in cabal
+- Use `git add -A` to stage all changes before nix operations
+
+**Flake Updates:**
+- Use `nix flake update` if build dependencies seem stale
+- The project uses `callCabal2nix` which auto-parses cabal files
+- No manual derivation updates needed for new modules
+
+**Build Commands:**
+- `nix develop --command cabal build` - Fast incremental development
+- `nix build` - Full package build with proper isolation
+- `./result/bin/ciqt` - Test the final nix-built binary
+
+### CLI Integration Patterns
+
+**Adding New Commands:**
+1. Add data types to `Types.hs` first
+2. Add command to `Command` ADT
+3. Update `appArgsParser` and `commandParser` in `CLI.hs`  
+4. Add operation parsers following existing patterns
+5. Add command handler to main program
+6. Always include help text and examples
+
+**Subcommand Patterns:**
+- Use `subparser` with `command` for each operation
+- Include `<**> helper` for help integration
+- Use `strArgument` for required arguments, `strOption` for optional flags
+- Follow existing help text patterns for consistency
+
+### Error Handling and User Experience
+
+**Runtime Error Patterns:**
+- Use specific error messages with context
+- Send errors to stderr, results to stdout
+- Use appropriate exit codes (`exitFailure` vs `exitSuccess`)
+- Handle missing files/directories gracefully
+
+**Development Error Patterns:**
+- Fix deferred type errors immediately - they cause runtime failures
+- Watch for variable shadowing warnings
+- Resolve import warnings to keep code clean
+- Test both success and failure paths during development
+
 ### Testing Strategy
 
 **Current Test Suite** (5 tests total, ~0.5s execution):
