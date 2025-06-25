@@ -22,21 +22,24 @@ library
       Ciqt
       Ciqt.AWS
       Ciqt.CLI
+      Ciqt.History
       Ciqt.Library
       Ciqt.Query
       Ciqt.Types
       Ciqt.Utils
   hs-source-dirs:
       src
-  ghc-options: -Wall -fdefer-type-errors
+  ghc-options: -Wall
   build-depends:
       base
     , aeson
     , amazonka >= 2.0
     , amazonka-core >= 2.0
     , amazonka-cloudwatch-logs >= 2.0
+    , base16-bytestring
     , bytestring
     , containers
+    , cryptohash
     , directory
     , exceptions
     , either
@@ -70,7 +73,7 @@ library
 
 executable ciqt
   main-is: src/Main.hs
-  ghc-options: -Wall -fdefer-type-errors
+  ghc-options: -Wall
   build-depends:
       base
     , ciqt
@@ -80,7 +83,7 @@ test-suite ciqt-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   hs-source-dirs: test
-  ghc-options: -Wall -fdefer-type-errors
+  ghc-options: -Wall
   build-depends:
       base
     , ciqt
@@ -93,6 +96,8 @@ test-suite ciqt-test
     , aeson
     , process
     , bytestring
+    , QuickCheck
+    , temporary
   default-language: Haskell2010
   default-extensions:
     GADTs

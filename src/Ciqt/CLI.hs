@@ -58,6 +58,13 @@ appArgsParser =
               <> help "Global path to directory containing saved queries (defaults to ~/.ciqt/queries)"
           )
       )
+    <*> optional
+      ( strOption
+          ( long "history-dir"
+              <> metavar "DIR"
+              <> help "Global path to directory containing history files (defaults to ~/.ciqt/history)"
+          )
+      )
 
 -- | Command parser with subcommands and backward compatibility
 commandParser :: Parser Command
@@ -80,6 +87,12 @@ commandParser =
           ( info
               (QueryShowCommand <$> queryArgsParser <**> helper)
               (progDesc "Display query content without execution (useful for validation)")
+          )
+        <> command
+          "history"
+          ( info
+              (HistoryCommand <$> historyArgsParser <**> helper)
+              (progDesc "Manage query execution history")
           )
     )
     <|> RunCommand <$> runArgsParser -- Default to run command for backward compatibility
@@ -224,6 +237,61 @@ queryArgsParser =
               <> help "Path to directory containing saved queries (defaults to ~/.ciqt/queries)"
           )
       )
+
+-- | Parser for history command arguments
+historyArgsParser :: Parser HistoryArgs
+historyArgsParser =
+  HistoryArgs
+    <$> historyOperationParser
+    <*> optional
+      ( strOption
+          ( long "history-dir"
+              <> metavar "DIR"
+              <> help "Path to directory containing history files (defaults to ~/.ciqt/history)"
+          )
+      )
+
+-- | Parser for history operations
+historyOperationParser :: Parser HistoryOperation
+historyOperationParser =
+  subparser
+    ( command
+        "list"
+        ( info
+            (pure ListHistory <**> helper)
+            (progDesc "List all history entries sorted by timestamp")
+        )
+        <> command
+          "show"
+          ( info
+              (showHistoryParser <**> helper)
+              (progDesc "Show details of a specific history entry by hash")
+          )
+        <> command
+          "rerun"
+          ( info
+              (rerunHistoryParser <**> helper)
+              (progDesc "Re-execute a query from history by hash")
+          )
+        <> command
+          "clear"
+          ( info
+              (pure ClearHistory <**> helper)
+              (progDesc "Clear all history entries")
+          )
+    )
+
+-- | Parser for show history operation
+showHistoryParser :: Parser HistoryOperation
+showHistoryParser =
+  ShowHistory
+    <$> strArgument (metavar "HASH" <> help "History entry hash (or unique prefix)")
+
+-- | Parser for rerun history operation
+rerunHistoryParser :: Parser HistoryOperation
+rerunHistoryParser =
+  RerunHistory
+    <$> strArgument (metavar "HASH" <> help "History entry hash (or unique prefix) to re-execute")
 
 -- | Parser for query argument with multiple sources
 queryArgParser :: Parser QueryArg

@@ -22,7 +22,7 @@ import Amazonka.CloudWatchLogs.Lens (getQueryResultsResponse_status, startQueryR
 import Amazonka.CloudWatchLogs.StartQuery (startQuery_logGroupNames)
 import Amazonka.CloudWatchLogs.StopQuery (newStopQuery)
 import Ciqt.Library (calculateQueryFromArg)
-import Ciqt.Types (Limit (..), RunArgs (..), TimeRange (..))
+import Ciqt.Types (Limit (..), RunArgs (..), TimeRange (..), runArgsLimit, runArgsQuery)
 import Ciqt.Utils (formatQueryStats)
 import Control.Exception.Lens (trying)
 import Control.Lens (view, (.~), (?~), (^.), (&))
@@ -109,7 +109,7 @@ calculateQueryStartEnd now timeRange =
 -- | Calculate limit from run arguments
 calculateLimitFromRunArgs :: RunArgs -> Maybe Natural
 calculateLimitFromRunArgs runArgs =
-  case _runArgsLimit runArgs of
+  case runArgs ^. runArgsLimit of
     Nothing -> Nothing
     Just MaxLimit -> Just 10000
     Just (ExplicitLimit x) -> Just x
@@ -117,4 +117,4 @@ calculateLimitFromRunArgs runArgs =
 -- | Calculate query from run arguments
 calculateQueryFromRunArgs :: RunArgs -> Maybe FilePath -> IO Text
 calculateQueryFromRunArgs runArgs queryLibPath =
-  calculateQueryFromArg (_runArgsQuery runArgs) queryLibPath
+  calculateQueryFromArg (runArgs ^. runArgsQuery) queryLibPath
