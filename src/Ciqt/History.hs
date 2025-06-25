@@ -40,7 +40,6 @@ generateHistoryId runArgs timestamp logGroups timeRange =
   Text.take 8 $ Text.decodeUtf8 $ Base16.encode $ 
   SHA256.hash $ Text.encodeUtf8 $ Text.concat 
     [ Text.pack $ show runArgs
-    , Text.pack $ show timestamp  
     , Text.pack $ show logGroups
     , Text.pack $ show timeRange
     ]
