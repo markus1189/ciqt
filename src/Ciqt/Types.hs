@@ -46,12 +46,11 @@ module Ciqt.Types
 where
 
 import Control.Lens.TH (makeLenses)
-import Control.Monad.Trans.Fail (FailT, runFailT)
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Functor.Identity (Identity, runIdentity)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Time (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatParseM)
 import Fmt ((+|), (|+))
@@ -223,9 +222,8 @@ instance FromJSON LogGroupsArg where
           Left err -> fail $ "Invalid glob pattern: " ++ err
       ["LogNameRegex"] -> do
         regexStr <- o .: "LogNameRegex"
-        case runIdentity . runFailT . makeRegexM @Regex @_ @_ @_ @(FailT String Identity) $ regexStr of
-          Right regex -> pure $ LogNameRegex (regexStr, regex)
-          Left err -> fail $ "Invalid regex pattern: " ++ err
+        regex <- makeRegexM (Text.unpack regexStr)
+        pure $ LogNameRegex (regexStr, regex)
       _ -> fail "Invalid LogGroupsArg"
 
 instance ToJSON TimeRange where
