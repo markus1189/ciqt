@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main (main) where
 
@@ -8,11 +9,14 @@ import Test.QuickCheck
 import Test.Tasty.QuickCheck
 import Ciqt.Utils (expandTilde, parseNestedJson)
 import Ciqt.History (generateHistoryId, findHistoryEntry)
-import Ciqt.Types (HistoryEntry(..), ExecutionStatus(..), LogGroupsArg(..), TimeRange(..), Limit(..))
+import Ciqt.Types (HistoryEntry(..), ExecutionStatus(..), LogGroupsArg(..), TimeRange(..), Limit(..), RunArgs(..), QueryArg(..))
+import qualified Ciqt.Types as CT
 import Data.Aeson qualified as Aeson
-import Data.Time (UTCTime, getCurrentTime)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Time (UTCTime, getCurrentTime, CalendarDiffTime(..))
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.List.NonEmpty qualified as NE
 import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive, doesDirectoryExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -46,12 +50,14 @@ historyTests :: TestTree
 historyTests = testGroup "History Tests"
   [ testCase "hash generation consistency" $ do
       let query1 = "fields @timestamp | limit 10"
-          logGroups1 = CommaLogGroups ["group1", "group2"]
-          timeRange1 = RelativeTimeRange "PT1H"
-          limit1 = Just (Limit 10)
+          logGroups1 = CommaLogGroups (NE.fromList ["group1", "group2"])
+          timeRange1 = TimeRangeRelative (CalendarDiffTime 0 3600)
+          limit1 = Just (ExplicitLimit 10)
       
-      hash1 <- generateHistoryId query1 logGroups1 timeRange1 limit1 Nothing
-      hash2 <- generateHistoryId query1 logGroups1 timeRange1 limit1 Nothing
+      let dummyRunArgs = RunArgs (QueryString "test") Nothing Nothing Nothing False Nothing
+      now <- getCurrentTime
+      let hash1 = generateHistoryId dummyRunArgs now logGroups1 timeRange1
+          hash2 = generateHistoryId dummyRunArgs now logGroups1 timeRange1
       
       hash1 @?= hash2
       T.length hash1 @?= 8
@@ -59,15 +65,18 @@ historyTests = testGroup "History Tests"
   , testCase "hash uniqueness for different inputs" $ do
       let query1 = "fields @timestamp | limit 10"
           query2 = "fields @timestamp | limit 20"
-          logGroups = CommaLogGroups ["group1"]
-          timeRange = RelativeTimeRange "PT1H"
-          limit1 = Just (Limit 10)
-          limit2 = Just (Limit 20)
+          logGroups = CommaLogGroups (NE.fromList ["group1"])
+          timeRange = TimeRangeRelative (CalendarDiffTime 0 3600)
+          limit1 = Just (ExplicitLimit 10)
+          limit2 = Just (ExplicitLimit 20)
       
-      hash1 <- generateHistoryId query1 logGroups timeRange limit1 Nothing
-      hash2 <- generateHistoryId query2 logGroups timeRange limit2 Nothing
+      let dummyRunArgs1 = RunArgs (QueryString "test1") Nothing Nothing Nothing False Nothing
+          dummyRunArgs2 = RunArgs (QueryString "test2") Nothing Nothing Nothing False Nothing
+      now <- getCurrentTime
+      let hash1 = generateHistoryId dummyRunArgs1 now logGroups timeRange
+          hash2 = generateHistoryId dummyRunArgs2 now logGroups timeRange
       
-      hash1 @/= hash2
+      hash1 /= hash2 @? "Hashes should be different"
       
   , testCase "partial hash matching" $ do
       withSystemTempDirectory "ciqt-test" $ \tempDir -> do
@@ -83,21 +92,23 @@ historyTests = testGroup "History Tests"
               { _historyId = T.pack fullHash
               , _historyTimestamp = now
               , _historyQuery = "test query"
-              , _historyLogGroups = CommaLogGroups ["test"]
-              , _historyTimeRange = RelativeTimeRange "PT1H"
+              , _historyLogGroups = CommaLogGroups (NE.fromList ["test"])
+              , _historyTimeRange = TimeRangeRelative (CalendarDiffTime 0 3600)
               , _historyLimit = Nothing
               , _historyQueryLibrary = Nothing
               , _historyExecutionTime = Nothing
-              , _historyStatus = Success
+              , _historyStatus = CT.Success
               }
         
-        writeFile historyFile (show $ Aeson.toJSON entry)
+        LBS.writeFile historyFile (Aeson.encode entry)
         
         -- Test partial hash matching
-        result1 <- findHistoryEntry historyDir "a1b2"
-        result1 @?= Just fullHash
+        result1 <- findHistoryEntry (Just historyDir) "a1b2"
+        case result1 of
+          Just entry -> _historyId entry @?= T.pack fullHash
+          Nothing -> assertFailure "Expected to find history entry"
         
-        result2 <- findHistoryEntry historyDir "xyz"
+        result2 <- findHistoryEntry (Just historyDir) "xyz"
         result2 @?= Nothing
         
   , testCase "directory operations" $ do
@@ -121,29 +132,31 @@ historyTests = testGroup "History Tests"
 
 propertyTests :: TestTree
 propertyTests = testGroup "Property Tests"
-  [ testProperty "HistoryEntry JSON roundtrip" $ \query logGroupText timeRangeName limitVal -> do
+  [ testCase "HistoryEntry JSON roundtrip" $ do
       now <- getCurrentTime
       let entry = HistoryEntry
             { _historyId = "testid01"
             , _historyTimestamp = now
-            , _historyQuery = T.pack query
-            , _historyLogGroups = CommaLogGroups [T.pack logGroupText]
-            , _historyTimeRange = RelativeTimeRange (T.pack timeRangeName)
-            , _historyLimit = if limitVal > 0 then Just (Limit $ fromInteger limitVal) else Nothing
+            , _historyQuery = "test query"
+            , _historyLogGroups = CommaLogGroups (NE.fromList ["test-group"])
+            , _historyTimeRange = TimeRangeRelative (CalendarDiffTime 0 3600)
+            , _historyLimit = Just (ExplicitLimit 10)
             , _historyQueryLibrary = Nothing
             , _historyExecutionTime = Nothing
-            , _historyStatus = Success
+            , _historyStatus = CT.Success
             }
       let encoded = Aeson.encode entry
           decoded = Aeson.decode encoded
-      return $ decoded == Just entry
+      decoded @?= Just entry
       
-  , testProperty "hash generation produces valid length" $ \query logGroupText timeRangeName -> do
-      hash <- generateHistoryId 
-        (T.pack query) 
-        (CommaLogGroups [T.pack logGroupText])
-        (RelativeTimeRange (T.pack timeRangeName))
-        Nothing
-        Nothing
-      return $ T.length hash == 8 && T.all (\c -> c `elem` ("0123456789abcdef" :: String)) hash
+  , testCase "hash generation produces valid length" $ do
+      let dummyRunArgs = RunArgs (QueryString "test") Nothing Nothing Nothing False Nothing
+      now <- getCurrentTime
+      let hash = generateHistoryId 
+                   dummyRunArgs
+                   now
+                   (CommaLogGroups (NE.fromList ["test-group"]))
+                   (TimeRangeRelative (CalendarDiffTime 0 3600))
+      T.length hash @?= 8
+      T.all (\c -> c `elem` ("0123456789abcdef" :: String)) hash @? "Hash should contain only hex chars"
   ]

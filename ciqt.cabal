@@ -90,6 +90,7 @@ test-suite ciqt-test
     , tasty
     , tasty-hunit
     , tasty-golden
+    , tasty-quickcheck
     , text
     , filepath
     , directory
@@ -98,6 +99,7 @@ test-suite ciqt-test
     , bytestring
     , QuickCheck
     , temporary
+    , time
   default-language: Haskell2010
   default-extensions:
     GADTs

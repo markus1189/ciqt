@@ -36,7 +36,7 @@ import System.IO (stderr)
 
 -- | Generate 8-character SHA256 hash for history entry ID
 generateHistoryId :: RunArgs -> UTCTime -> LogGroupsArg -> TimeRange -> Text
-generateHistoryId runArgs timestamp logGroups timeRange =
+generateHistoryId runArgs _timestamp logGroups timeRange =
   Text.take 8 $ Text.decodeUtf8 $ Base16.encode $
   SHA256.hash $ Text.encodeUtf8 $ Text.concat
     [ Text.pack $ show runArgs
