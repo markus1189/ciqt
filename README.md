@@ -1,12 +1,35 @@
-# CloudWatch Insights Query Tool
+# CloudWatch Insights Query Tool (CIQT)
 
 <p align="center">
   <img src="assets/logo.png" alt="CloudWatch Insights Query Tool Logo" width="200">
 </p>
 
-A command-line utility for executing and retrieving CloudWatch Insights queries with flexible log group selection and time range options.
+<p align="center">
+  <strong>A professional-grade command-line utility for executing and managing CloudWatch Insights queries</strong>
+</p>
 
-**Built with Haskell** for reliability and performance, featuring a sophisticated functional architecture with comprehensive AWS integration, dual query library system, and robust resource management.
+<p align="center">
+  <a href="#installation">Installation</a> •
+  <a href="#features">Features</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#examples">Examples</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#development">Development</a>
+</p>
+
+---
+
+## Overview
+
+CIQT provides enterprise-ready tooling for CloudWatch Logs analysis with sophisticated query management, execution history tracking, and seamless AWS integration. Built with Haskell for reliability and performance, it features a functional architecture with comprehensive resource management and type safety.
+
+### Key Capabilities
+
+- **Advanced Query Execution**: Multiple query sources with flexible log group selection
+- **Comprehensive History Tracking**: Automatic recording with SHA256-based indexing
+- **Dual Library System**: Local and AWS CloudWatch Logs Insights integration
+- **Enterprise Integration**: JSON output, dry-run validation, and robust error handling
+- **High Performance**: Streaming results, memory-conscious design, optimized AWS API usage
 
 ## Installation
 
@@ -33,38 +56,58 @@ nix build
 
 ## Features
 
-- Execute CloudWatch Insights queries directly from the command line
-- Sub-command structure for organized functionality (`run`, `library`, `query`, `history`)
-- **Comprehensive query history tracking:**
-  - Automatic recording of all query executions with full parameters
-  - Individual JSON files per execution with SHA256 hash IDs
-  - Track execution time, status (Success/Failed/DryRun), and metadata
-  - List, show, rerun, and clear history entries
-  - Partial hash matching for easy reference
-  - Configurable history directory
-- **Dual query library system:**
-  - Local file-based query library for personal queries
-  - **AWS CloudWatch Logs Insights saved queries integration**
-  - Sync and manage queries between local and AWS
-- Multiple ways to specify log groups:
-  - Comma-separated list of log group names
-  - Pattern matching (substring search)
-  - Prefix matching
-  - Glob pattern matching
-  - Regular expression matching
-- **Multiple query sources:**
-  - Direct query strings
-  - Local files
-  - Local library queries
-  - **AWS saved queries by ID**
-- Flexible time range specification:
-  - Absolute time ranges with start and optional end times
-  - Relative time ranges (e.g., "query logs from the last 3 hours")
-- Control over result limits
-- Dry-run mode to preview query parameters without execution
-- JSON output for easy integration with other tools
-- **Robust architecture**: Functional programming with comprehensive error handling and automatic resource cleanup
-- **High performance**: Efficient streaming, memory-conscious design, and optimized AWS API usage
+### Core Functionality
+
+- **Command-Line Query Execution**: Direct CloudWatch Insights query execution with comprehensive parameter control
+- **Modular Command Structure**: Organized functionality through `run`, `library`, `query`, and `history` subcommands
+- **Enterprise Integration**: JSON output format, dry-run validation, and robust error handling
+
+### Query History Management
+
+- **Automatic Execution Tracking**: Complete parameter and result recording for all query executions
+- **SHA256-Based Indexing**: Individual JSON files per execution with cryptographic hash identification
+- **Comprehensive Metadata**: Execution time, status tracking (Success/Failed/DryRun), and full parameter history
+- **Advanced History Operations**: List, show, rerun, and clear capabilities with partial hash matching
+- **Configurable Storage**: Customizable history directory with organized file structure
+
+### Query Library System
+
+- **Dual Library Architecture**: 
+  - Local file-based query management for personal collections
+  - Native AWS CloudWatch Logs Insights saved queries integration
+- **Synchronization Capabilities**: Bidirectional sync between local and AWS query libraries
+- **Hierarchical Organization**: Directory-based query organization with automatic management
+
+### Log Group Selection
+
+- **Multiple Selection Methods**:
+  - Direct specification via comma-separated log group names
+  - Pattern-based matching with substring search
+  - Prefix-based filtering for namespace organization
+  - Advanced glob pattern matching for complex selections
+  - Full PCRE regular expression support for sophisticated filtering
+
+### Query Source Flexibility
+
+- **Multiple Input Methods**:
+  - Direct command-line query strings
+  - Local file-based query loading
+  - Local library query references
+  - Direct AWS saved query execution by ID
+
+### Time Range Management
+
+- **Flexible Time Specification**:
+  - Absolute time ranges with ISO8601 format support
+  - Relative time ranges using ISO8601 duration format
+  - Intelligent defaults with optional end time specification
+
+### Performance & Reliability
+
+- **High-Performance Architecture**: Efficient streaming, memory-conscious design, optimized AWS API usage
+- **Robust Resource Management**: Automatic cleanup using ResourceT and bracket patterns
+- **Type-Safe Design**: Comprehensive ADT modeling with compile-time safety guarantees
+- **Functional Programming**: Immutable architecture with lens-based data manipulation
 
 ## Usage
 
@@ -217,9 +260,9 @@ ciqt history clear [--history-dir DIR]
 **Global Options:**
 - `--history-dir DIR` - Path to history directory (defaults to `~/.ciqt/history/`)
 
-### Examples
+## Examples
 
-#### Running Queries
+### Basic Query Execution
 
 Query the last hour of logs from a specific log group:
 ```bash
@@ -246,7 +289,7 @@ ciqt run --query-name aws/lambda/errors --log-groups /aws/lambda/my-function --s
 ciqt run --query-aws-id abc123-def456 --log-groups /aws/lambda/my-function --since PT2H
 ```
 
-#### Working with AWS Saved Queries
+### AWS Saved Queries Integration
 
 List all AWS saved queries:
 ```bash
@@ -273,160 +316,189 @@ View an AWS query without executing it:
 ciqt query --query-aws-id abc123-def456
 ```
 
-#### Backward Compatibility
+### History Management Examples
+
+View recent query executions:
+```bash
+ciqt history list
+```
+
+Show detailed information for a specific execution:
+```bash
+ciqt history show a1b2c3d4
+```
+
+Re-execute a previous query:
+```bash
+ciqt history rerun a1b2
+```
+
+Clear all execution history:
+```bash
+ciqt history clear
+```
+
+### Backward Compatibility
 
 All existing commands work without the `run` sub-command:
 ```bash
 ciqt --log-groups /aws/lambda/my-function --since PT1H --query "fields @timestamp, @message"
 ```
 
-## Output
+## Output Format
 
-The tool outputs:
-- Query results as JSON to stdout
-- Query metadata and statistics to stderr
+CIQT provides structured output designed for both human consumption and programmatic integration:
 
-## Requirements
+- **Query Results**: JSON-formatted log events streamed to stdout
+- **Metadata & Statistics**: Query execution information and AWS statistics to stderr
+- **Structured Logging**: Comprehensive execution tracking with configurable verbosity
 
-- AWS credentials configured (via environment variables, AWS profile, etc.)
-- Appropriate IAM permissions for CloudWatch Logs access
-- **For AWS saved queries functionality, additional permissions required:**
-  - `logs:DescribeQueryDefinitions` - List saved queries
-  - `logs:PutQueryDefinition` - Create/update saved queries
-  - `logs:DeleteQueryDefinition` - Delete saved queries
+## Prerequisites
 
-#### Managing Library Queries
+### AWS Configuration
 
-##### Listing All Queries
+- **Credentials**: AWS credentials configured via environment variables, AWS profiles, or IAM roles
+- **Region**: Appropriate AWS region configuration for target CloudWatch Logs
 
-View all available queries in your library:
+### IAM Permissions
 
-```bash
-ciqt library list
-```
+**Required for basic functionality:**
+- `logs:StartQuery` - Execute CloudWatch Insights queries
+- `logs:GetQueryResults` - Retrieve query results
+- `logs:StopQuery` - Cancel running queries
+- `logs:DescribeLogGroups` - Discover and validate log groups
 
-This displays queries organized by their directory structure.
+**Additional permissions for AWS saved queries:**
+- `logs:DescribeQueryDefinitions` - List saved queries
+- `logs:PutQueryDefinition` - Create/update saved queries
+- `logs:DeleteQueryDefinition` - Delete saved queries
 
-##### Saving Queries
-
-Save a query to your library:
-
-```bash
-ciqt library save errors --query "fields @timestamp, @message | filter @message like 'ERROR'"
-```
-
-Save to a subdirectory (directories are created automatically):
-
-```bash
-ciqt library save aws/lambda/errors --query "fields @timestamp, @message | filter @message like 'ERROR'"
-```
-
-Save from a file:
-
-```bash
-ciqt library save my-query --query-file ./my-query.txt
-```
-
-##### Viewing Library Queries
-
-Display the content of a saved query:
-
-```bash
-ciqt library show errors
-```
-
-This works with queries in subdirectories too:
-
-```bash
-ciqt library show aws/lambda/errors
-```
-
-Alternatively, use the `query` command:
-
-```bash
-ciqt query --query-name aws/lambda/errors
-```
-
-##### Deleting Queries
-
-Remove a query from your library:
-
-```bash
-ciqt library delete errors
-```
-
-Delete from subdirectories:
-
-```bash
-ciqt library delete aws/lambda/errors
-```
+## Configuration
 
 ### Query Library Structure
 
-By default, the query library is located at `~/.ciqt/queries/`. Each query is stored as a separate file with a `.query` extension. The library supports organizing queries in subdirectories for better management.
+The local query library uses a hierarchical file structure for organization:
 
-Example library structure:
+**Default Location**: `~/.ciqt/queries/`
+
+**File Format**: Individual `.query` files with plain text CloudWatch Insights queries
+
+**Example Structure**:
 ```
 ~/.ciqt/queries/
-├── errors.query
+├── errors.query                    # Root-level queries
 ├── aws/
 │   ├── lambda/
-│   │   ├── errors.query
-│   │   └── performance.query
+│   │   ├── errors.query            # Lambda-specific error queries
+│   │   └── performance.query       # Performance analysis queries
 │   └── api-gateway/
-│       └── latency.query
+│       └── latency.query           # API Gateway latency queries
 └── application/
-    └── startup.query
+    ├── startup.query               # Application startup analysis
+    └── monitoring.query            # General monitoring queries
 ```
 
-### Manual Management
+### History Storage
 
-You can also manually manage queries by creating text files with the `.query` extension:
+Execution history is automatically managed with the following structure:
+
+**Default Location**: `~/.ciqt/history/`
+
+**File Format**: Individual JSON files per execution with SHA256-based naming
+
+**Example Structure**:
+```
+~/.ciqt/history/
+├── a1b2c3d4.json                   # Individual execution records
+├── e5f6g7h8.json                   # Each file contains complete execution metadata
+└── ...                             # Automatic cleanup and organization
+```
+
+### Manual Query Management
+
+For advanced users, queries can be managed directly through the filesystem:
 
 ```bash
+# Create query directory structure
 mkdir -p ~/.ciqt/queries/aws/lambda
+
+# Add query directly
 echo "fields @timestamp, @message | filter @message like 'ERROR'" > ~/.ciqt/queries/aws/lambda/errors.query
+
+# Verify query integration
+ciqt library list
 ```
 
 ## Architecture
 
-### Technical Overview
+### Technical Foundation
 
-- **Language**: Haskell with functional programming paradigm
-- **Build System**: Nix flakes for reproducible builds and development environments
-- **AWS Integration**: Uses amazonka library (≥ 2.0) with comprehensive resource management
-- **Architecture**: Modular library design with 7 focused modules and minimal executable wrapper
-- **Resource Management**: Automatic cleanup of AWS resources and graceful shutdown handling
+**Language & Paradigm**
+- **Haskell**: Functional programming with strong type safety and immutability
+- **Modular Design**: 7 focused modules with clean separation of concerns
+- **Lens Architecture**: Elegant data manipulation with compile-time safety guarantees
 
-### Key Design Principles
+**Build & Deployment**
+- **Nix Flakes**: Reproducible builds and hermetic development environments
+- **Cabal Integration**: Professional package management with dependency resolution
+- **Cross-Platform**: Linux, macOS, and NixOS support
 
-- **Modular architecture**: Clean separation of concerns across focused modules
-- **Immutable coding style**: Functional approach with minimal side effects
-- **Lens-heavy architecture**: Elegant data manipulation with compile-time safety
-- **Resource safety**: Automatic cleanup using ResourceT and bracket patterns
-- **Type safety**: Strong typing with custom ADTs for domain modeling
+**AWS Integration**
+- **Amazonka SDK**: Modern AWS SDK (≥ 2.0) with comprehensive CloudWatch Logs support
+- **Resource Management**: Automatic cleanup using ResourceT and bracket patterns
+- **Credential Chain**: Standard AWS credential discovery with environment integration
 
-## Performance Considerations
+### Design Principles
 
-### Large-Scale Usage
+**Reliability**
+- **Type Safety**: Comprehensive ADT modeling prevents runtime errors
+- **Resource Safety**: Guaranteed cleanup of AWS resources and file handles
+- **Exception Handling**: Comprehensive error management with graceful degradation
 
-- **Log Group Discovery**: `--log-group-glob` and `--log-group-regex` retrieve all log groups first, which may be slow in accounts with many log groups (1000+)
-- **Query Limits**: AWS CloudWatch Insights has a maximum result limit of 10,000 rows per query
-- **Concurrent Queries**: Tool executes one query at a time with proper resource management
-- **Memory Usage**: Results are streamed to reduce memory footprint for large result sets
+**Performance**
+- **Streaming Architecture**: Memory-efficient result processing for large datasets
+- **Optimized API Usage**: Intelligent pagination and request batching
+- **Concurrent Design**: Parallel execution where appropriate with proper synchronization
 
-### Optimization Tips
+**Maintainability**
+- **Immutable Data Structures**: Functional approach minimizes side effects
+- **Pure Functions**: Clear separation between IO operations and business logic
+- **Comprehensive Testing**: Unit tests, integration tests, and property-based testing
 
-- Use specific log group names (`--log-groups`) when possible for fastest performance
-- Use `--log-group-prefix` for efficient filtering without full log group enumeration
-- Consider `--limit` for exploratory queries to reduce execution time
-- Use `--dry-run` to validate query parameters without execution
+## Performance & Scalability
 
-## Security
+### Enterprise-Scale Considerations
 
-### IAM Permissions
+**Log Group Discovery**
+- **Direct Selection**: Fastest performance using specific log group names (`--log-groups`)
+- **Prefix Filtering**: Efficient namespace-based filtering (`--log-group-prefix`)
+- **Pattern Matching**: Moderate performance for substring matching (`--log-group-pattern`)
+- **Advanced Patterns**: `--log-group-glob` and `--log-group-regex` require full enumeration (slower for 1000+ log groups)
 
-**Basic CloudWatch Logs access:**
+**Query Execution**
+- **AWS Limits**: Maximum 10,000 rows per query (AWS CloudWatch Insights limitation)
+- **Streaming Results**: Memory-efficient processing for large result sets
+- **Resource Management**: Single query execution with proper AWS resource cleanup
+- **Timeout Handling**: 30-minute execution limit with 2-second polling intervals
+
+### Performance Optimization
+
+**Query Strategy**
+- Use specific log group names for maximum performance
+- Leverage prefix matching for namespace-based selections
+- Apply result limits (`--limit`) for exploratory analysis
+- Utilize dry-run mode (`--dry-run`) for parameter validation
+
+**Memory Management**
+- Results streamed directly to stdout to minimize memory usage
+- Automatic cleanup of temporary resources and AWS connections
+- Efficient JSON processing with lazy evaluation where appropriate
+
+## Security & Best Practices
+
+### IAM Configuration
+
+**Minimal Required Permissions**
 ```json
 {
   "Version": "2012-10-17",
@@ -445,7 +517,7 @@ echo "fields @timestamp, @message | filter @message like 'ERROR'" > ~/.ciqt/quer
 }
 ```
 
-**For AWS saved queries functionality:**
+**Extended Permissions for AWS Saved Queries**
 ```json
 {
   "Version": "2012-10-17",
@@ -463,12 +535,22 @@ echo "fields @timestamp, @message | filter @message like 'ERROR'" > ~/.ciqt/quer
 }
 ```
 
-### Best Practices
+### Security Best Practices
 
-- Use AWS IAM roles instead of long-term access keys when possible
-- Scope permissions to specific log groups using resource ARNs
-- Monitor CloudWatch Logs usage and costs, especially with broad log group patterns
-- Use `--dry-run` to preview queries before execution in production environments
+**Credential Management**
+- Use AWS IAM roles instead of long-term access keys
+- Leverage AWS profile-based authentication for multi-account access
+- Implement credential rotation policies for enhanced security
+
+**Access Control**
+- Scope permissions to specific log groups using resource ARNs when possible
+- Implement least-privilege access principles
+- Regular audit of CloudWatch Logs access patterns
+
+**Operational Security**
+- Use `--dry-run` for query validation in production environments
+- Monitor CloudWatch Logs usage and associated costs
+- Implement query review processes for broad log group patterns
 
 ## Development
 
@@ -571,9 +653,24 @@ nix --version
 - Consider reducing query time ranges for initial testing
 - Use `--limit` to cap result sizes during development
 
-## Notes
+## Operational Notes
 
-- When using `--log-group-glob` or `--log-group-regex`, the tool retrieves all log groups first, which may be slow in accounts with many log groups
-- Queries can be stopped with Ctrl+C, and the tool will attempt to stop the running query on AWS
-- The tool uses a 30-minute timeout for query execution with 2-second polling intervals
-- Results are streamed to stdout as JSON, with progress information sent to stderr
+### Query Execution Behavior
+
+- **Interruption Handling**: Queries can be safely interrupted with Ctrl+C, automatically stopping AWS query execution
+- **Timeout Management**: 30-minute maximum execution time with 2-second polling intervals
+- **Output Streaming**: Results streamed to stdout as JSON with progress information on stderr
+- **Resource Cleanup**: Automatic cleanup of AWS resources on normal or abnormal termination
+
+### Performance Considerations
+
+- **Log Group Enumeration**: `--log-group-glob` and `--log-group-regex` require full log group discovery (potentially slow for large AWS accounts)
+- **Query Optimization**: Consider log group count and query complexity when designing automated workflows
+- **Rate Limiting**: AWS API rate limits may affect operations in high-frequency usage scenarios
+
+---
+
+<p align="center">
+  <strong>CIQT - Professional CloudWatch Insights Query Management</strong><br/>
+  Built with ❤️ using Haskell and Nix
+</p>
