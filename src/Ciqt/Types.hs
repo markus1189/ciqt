@@ -46,6 +46,7 @@ module Ciqt.Types
 where
 
 import Control.Lens.TH (makeLenses)
+import Control.Lens ((^.))
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List.NonEmpty (NonEmpty)
@@ -166,8 +167,7 @@ data HistoryEntry = HistoryEntry
   }
   deriving (Eq, Show)
 
-instance Ord HistoryEntry where
-  compare e1 e2 = compare (_historyTimestamp e1) (_historyTimestamp e2)
+-- Ord instance will be defined after makeLenses
 
 -- | History management operations
 data HistoryOperation
@@ -276,18 +276,7 @@ instance FromJSON ExecutionStatus where
     "DryRun" -> pure DryRun
     _ -> fail "Invalid ExecutionStatus"
 
-instance ToJSON HistoryEntry where
-  toJSON entry = object
-    [ "historyId" .= _historyId entry
-    , "timestamp" .= _historyTimestamp entry
-    , "query" .= _historyQuery entry
-    , "logGroups" .= _historyLogGroups entry
-    , "timeRange" .= _historyTimeRange entry
-    , "limit" .= _historyLimit entry
-    , "queryLibrary" .= _historyQueryLibrary entry
-    , "executionTime" .= _historyExecutionTime entry
-    , "status" .= _historyStatus entry
-    ]
+-- ToJSON instance will be defined after makeLenses
 
 instance FromJSON HistoryEntry where
   parseJSON = withObject "HistoryEntry" $ \o -> HistoryEntry
@@ -308,3 +297,20 @@ makeLenses ''QueryShowArgs
 makeLenses ''HistoryEntry
 makeLenses ''HistoryArgs
 makeLenses ''AppArgs
+
+-- Instances that require lenses
+instance Ord HistoryEntry where
+  compare e1 e2 = compare (e1 ^. historyTimestamp) (e2 ^. historyTimestamp)
+
+instance ToJSON HistoryEntry where
+  toJSON entry = object
+    [ "historyId" .= (entry ^. historyId)
+    , "timestamp" .= (entry ^. historyTimestamp)
+    , "query" .= (entry ^. historyQuery)
+    , "logGroups" .= (entry ^. historyLogGroups)
+    , "timeRange" .= (entry ^. historyTimeRange)
+    , "limit" .= (entry ^. historyLimit)
+    , "queryLibrary" .= (entry ^. historyQueryLibrary)
+    , "executionTime" .= (entry ^. historyExecutionTime)
+    , "status" .= (entry ^. historyStatus)
+    ]

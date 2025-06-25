@@ -16,7 +16,7 @@ import Ciqt.Query (buildQuery, executeQuery, calculateQueryStartEnd, calculateLi
 import Ciqt.Types
 import Ciqt.Utils (parseNestedJson, resultFieldsToJson, printPreFlightInfo, formatQueryStats)
 import Control.Exception (SomeException, try)
-import Control.Lens ((&), (^.), (%~))
+import Control.Lens ((&), (^.), (.~), (%~))
 import Control.Applicative ((<|>))
 import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
@@ -209,19 +209,17 @@ handleHistoryCommand historyArgs globalHistoryDir = do
           TIO.hPutStrLn stderr $ "History entry not found: " <> hash
           exitFailure
         Just entry -> do
-          TIO.putStrLn $ "Re-executing query from history: " <> _historyId entry
+          TIO.putStrLn $ "Re-executing query from history: " <> entry ^. historyId
           -- Create new RunArgs from history entry and re-execute
-          let runArgs = RunArgs
-                { _runArgsQuery = QueryString (_historyQuery entry)
-                , _runArgsLimit = _historyLimit entry
-                , _runArgsTimeRange = Just (_historyTimeRange entry)
-                , _runArgsLogGroups = Just (_historyLogGroups entry)
-                , _runArgsDryRun = False
-                , _runArgsQueryLibrary = _historyQueryLibrary entry
-                }
+          let runArgs = (RunArgs (QueryString (entry ^. historyQuery)) Nothing Nothing Nothing False Nothing)
+                & runArgsLimit .~ (entry ^. historyLimit)
+                & runArgsTimeRange .~ Just (entry ^. historyTimeRange)
+                & runArgsLogGroups .~ Just (entry ^. historyLogGroups)
+                & runArgsDryRun .~ False
+                & runArgsQueryLibrary .~ (entry ^. historyQueryLibrary)
           -- Use a dummy FastLogger for rerun
           withFastLogger (LogStderr defaultBufSize) $ \fastLogger ->
-            handleRunCommand fastLogger runArgs (_historyQueryLibrary entry) historyDir
+            handleRunCommand fastLogger runArgs (entry ^. historyQueryLibrary) historyDir
     
     ClearHistory -> do
       clearHistory historyDir
@@ -230,11 +228,11 @@ handleHistoryCommand historyArgs globalHistoryDir = do
 -- | Print a summary line for a history entry
 printHistoryEntrySummary :: HistoryEntry -> IO ()
 printHistoryEntrySummary entry = do
-  let hashStr = _historyId entry
-      timestamp = Text.pack $ show $ _historyTimestamp entry
-      queryPreview = Text.take 50 $ Text.replace "\n" " " $ _historyQuery entry
-      statusStr = Text.pack $ show $ _historyStatus entry
-      executionTimeStr = case _historyExecutionTime entry of
+  let hashStr = entry ^. historyId
+      timestamp = Text.pack $ show $ entry ^. historyTimestamp
+      queryPreview = Text.take 50 $ Text.replace "\n" " " $ entry ^. historyQuery
+      statusStr = Text.pack $ show $ entry ^. historyStatus
+      executionTimeStr = case entry ^. historyExecutionTime of
         Nothing -> "N/A"
         Just time -> Text.pack $ show (round time :: Int) <> "s"
   
@@ -249,22 +247,22 @@ printHistoryEntrySummary entry = do
 -- | Print detailed information for a history entry
 printHistoryEntryDetails :: HistoryEntry -> IO ()
 printHistoryEntryDetails entry = do
-  TIO.putStrLn $ "History ID: " <> _historyId entry
-  TIO.putStrLn $ "Timestamp: " <> Text.pack (show $ _historyTimestamp entry)
-  TIO.putStrLn $ "Status: " <> Text.pack (show $ _historyStatus entry)
-  TIO.putStrLn $ "Execution Time: " <> case _historyExecutionTime entry of
+  TIO.putStrLn $ "History ID: " <> entry ^. historyId
+  TIO.putStrLn $ "Timestamp: " <> Text.pack (show $ entry ^. historyTimestamp)
+  TIO.putStrLn $ "Status: " <> Text.pack (show $ entry ^. historyStatus)
+  TIO.putStrLn $ "Execution Time: " <> case entry ^. historyExecutionTime of
     Nothing -> "N/A"
     Just time -> Text.pack (show time) <> " seconds"
-  TIO.putStrLn $ "Log Groups: " <> Text.pack (show $ _historyLogGroups entry)
-  TIO.putStrLn $ "Time Range: " <> Text.pack (show $ _historyTimeRange entry)
-  TIO.putStrLn $ "Limit: " <> case _historyLimit entry of
+  TIO.putStrLn $ "Log Groups: " <> Text.pack (show $ entry ^. historyLogGroups)
+  TIO.putStrLn $ "Time Range: " <> Text.pack (show $ entry ^. historyTimeRange)
+  TIO.putStrLn $ "Limit: " <> case entry ^. historyLimit of
     Nothing -> "None"
     Just limit -> Text.pack (show limit)
-  TIO.putStrLn $ "Query Library: " <> case _historyQueryLibrary entry of
+  TIO.putStrLn $ "Query Library: " <> case entry ^. historyQueryLibrary of
     Nothing -> "Default"
     Just path -> Text.pack path
   TIO.putStrLn "Query:"
-  TIO.putStrLn $ _historyQuery entry
+  TIO.putStrLn $ entry ^. historyQuery
 
 -- | Helper function to show types as Text (temporary)
 showText :: Show a => a -> Text

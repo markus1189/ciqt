@@ -15,9 +15,10 @@ module Ciqt.History
   )
 where
 
-import Ciqt.Types (ExecutionStatus (..), HistoryEntry (..), LogGroupsArg, Limit, RunArgs, TimeRange)
+import Ciqt.Types (ExecutionStatus (..), HistoryEntry (..), LogGroupsArg, Limit, RunArgs, TimeRange, historyExecutionTime, historyStatus)
 import Ciqt.Utils (expandTilde)
 import Control.Exception (try, SomeException)
+import Control.Lens ((&), (.~))
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (decode', encode)
 import Data.ByteString.Base16 qualified as Base16
@@ -89,9 +90,8 @@ updateHistoryEntry maybeHistoryDir historyId executionTime status = do
       Nothing -> fail "Could not parse history entry"
       Just entry -> do
         let updatedEntry = entry 
-              { _historyExecutionTime = executionTime
-              , _historyStatus = status
-              }
+              & historyExecutionTime .~ executionTime
+              & historyStatus .~ status
         LBS.writeFile filePath (encode updatedEntry)
   
   case result of
