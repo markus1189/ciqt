@@ -22,6 +22,7 @@ library
       Ciqt
       Ciqt.AWS
       Ciqt.CLI
+      Ciqt.History
       Ciqt.Library
       Ciqt.Query
       Ciqt.Types
@@ -35,8 +36,10 @@ library
     , amazonka >= 2.0
     , amazonka-core >= 2.0
     , amazonka-cloudwatch-logs >= 2.0
+    , base16-bytestring
     , bytestring
     , containers
+    , cryptohash
     , directory
     , exceptions
     , either

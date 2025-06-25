@@ -10,6 +10,10 @@ module Ciqt.Types
     LibraryOperation (..),
     LibraryArgs (..),
     QueryShowArgs (..),
+    ExecutionStatus (..),
+    HistoryEntry (..),
+    HistoryOperation (..),
+    HistoryArgs (..),
     Command (..),
     AppArgs (..),
     
@@ -24,19 +28,36 @@ module Ciqt.Types
     libraryArgsQueryLibrary,
     queryShowArgsQuery,
     queryShowArgsQueryLibrary,
+    historyId,
+    historyTimestamp,
+    historyQuery,
+    historyLogGroups,
+    historyTimeRange,
+    historyLimit,
+    historyQueryLibrary,
+    historyExecutionTime,
+    historyStatus,
+    historyArgsOperation,
+    historyArgsHistoryDir,
     appArgsCommand,
     appArgsGlobalQueryLibrary,
+    appArgsGlobalHistoryDir,
   )
 where
 
 import Control.Lens.TH (makeLenses)
+import Control.Monad.Trans.Fail (FailT, runFailT)
+import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Functor.Identity (Identity, runIdentity)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
-import Data.Time (CalendarDiffTime, ZonedTime)
+import Data.Time (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
+import Data.Time.Format.ISO8601 (ISO8601 (iso8601Format), formatParseM)
 import Fmt ((+|), (|+))
 import Numeric.Natural (Natural)
-import System.FilePath.Glob (Pattern)
-import Text.Regex.PCRE (Regex)
+import System.FilePath.Glob (Pattern, compDefault, tryCompileWith)
+import Text.Regex.PCRE (Regex, RegexMaker (makeRegexM))
 
 -- | Different methods for specifying log groups
 data LogGroupsArg
@@ -53,11 +74,25 @@ instance Show LogGroupsArg where
   show (LogNameGlob g) = "LogNameGlob " +| show g |+ ""
   show (LogNameRegex (r, _)) = "LogNameRegex " +| show r |+ ""
 
+instance Eq LogGroupsArg where
+  CommaLogGroups lgs1 == CommaLogGroups lgs2 = lgs1 == lgs2
+  LogNamePattern p1 == LogNamePattern p2 = p1 == p2
+  LogNamePrefix s1 == LogNamePrefix s2 = s1 == s2
+  LogNameGlob g1 == LogNameGlob g2 = show g1 == show g2  -- Compare string representation
+  LogNameRegex (r1, _) == LogNameRegex (r2, _) = r1 == r2  -- Compare pattern text
+  _ == _ = False
+
 -- | Time range specification for queries
 data TimeRange 
   = TimeRangeAbsolute ZonedTime (Maybe ZonedTime) -- ^ Absolute start and optional end time
   | TimeRangeRelative CalendarDiffTime            -- ^ Relative time range (e.g., last hour)
   deriving (Show)
+
+instance Eq TimeRange where
+  TimeRangeAbsolute s1 e1 == TimeRangeAbsolute s2 e2 = 
+    show s1 == show s2 && show e1 == show e2  -- Compare string representations
+  TimeRangeRelative d1 == TimeRangeRelative d2 = d1 == d2
+  _ == _ = False
 
 -- | Query result limit specification
 data Limit 
@@ -111,22 +146,167 @@ data QueryShowArgs = QueryShowArgs
   }
   deriving (Show)
 
+-- | Query execution status
+data ExecutionStatus
+  = Success  -- ^ Query executed successfully
+  | Failed   -- ^ Query execution failed
+  | DryRun   -- ^ Dry run mode (query not executed)
+  deriving (Eq, Show)
+
+-- | History entry representing a single query execution
+data HistoryEntry = HistoryEntry
+  { _historyId :: Text                        -- ^ 8-char SHA256 hash
+  , _historyTimestamp :: UTCTime              -- ^ When query was executed
+  , _historyQuery :: Text                     -- ^ The query text
+  , _historyLogGroups :: LogGroupsArg         -- ^ Log groups specification
+  , _historyTimeRange :: TimeRange            -- ^ Time range specification
+  , _historyLimit :: Maybe Limit              -- ^ Result limit
+  , _historyQueryLibrary :: Maybe FilePath    -- ^ Query library path used
+  , _historyExecutionTime :: Maybe NominalDiffTime -- ^ How long execution took
+  , _historyStatus :: ExecutionStatus         -- ^ Success/Failed/DryRun
+  }
+  deriving (Eq, Show)
+
+instance Ord HistoryEntry where
+  compare e1 e2 = compare (_historyTimestamp e1) (_historyTimestamp e2)
+
+-- | History management operations
+data HistoryOperation
+  = ListHistory           -- ^ List all history entries
+  | ShowHistory Text      -- ^ Show details of specific entry by hash
+  | RerunHistory Text     -- ^ Re-execute query from history by hash
+  | ClearHistory          -- ^ Clear all history entries
+  deriving (Show)
+
+-- | Arguments for the history command
+data HistoryArgs = HistoryArgs
+  { _historyArgsOperation :: HistoryOperation  -- ^ Operation to perform
+  , _historyArgsHistoryDir :: Maybe FilePath   -- ^ Optional custom history directory
+  }
+  deriving (Show)
+
 -- | Top-level commands
 data Command
   = RunCommand RunArgs           -- ^ Execute query command
   | LibraryCommand LibraryArgs   -- ^ Library management command
   | QueryShowCommand QueryShowArgs -- ^ Query display command
+  | HistoryCommand HistoryArgs   -- ^ History management command
   deriving (Show)
 
 -- | Top-level application arguments
 data AppArgs = AppArgs
   { _appArgsCommand :: Command,              -- ^ Command to execute
-    _appArgsGlobalQueryLibrary :: Maybe FilePath -- ^ Global query library path
+    _appArgsGlobalQueryLibrary :: Maybe FilePath, -- ^ Global query library path
+    _appArgsGlobalHistoryDir :: Maybe FilePath -- ^ Global history directory path
   }
   deriving (Show)
+
+-- JSON instances for dependent types
+instance ToJSON LogGroupsArg where
+  toJSON (CommaLogGroups lgs) = object ["CommaLogGroups" .= lgs]
+  toJSON (LogNamePattern p) = object ["LogNamePattern" .= p]
+  toJSON (LogNamePrefix s) = object ["LogNamePrefix" .= s]
+  toJSON (LogNameGlob g) = object ["LogNameGlob" .= show g]
+  toJSON (LogNameRegex (r, _)) = object ["LogNameRegex" .= r]
+
+instance FromJSON LogGroupsArg where
+  parseJSON = withObject "LogGroupsArg" $ \o -> do
+    let keys = KeyMap.keys o
+    case keys of
+      ["CommaLogGroups"] -> CommaLogGroups <$> o .: "CommaLogGroups"
+      ["LogNamePattern"] -> LogNamePattern <$> o .: "LogNamePattern"
+      ["LogNamePrefix"] -> LogNamePrefix <$> o .: "LogNamePrefix"
+      ["LogNameGlob"] -> do
+        globStr <- o .: "LogNameGlob"
+        case tryCompileWith compDefault globStr of
+          Right pattern -> pure $ LogNameGlob pattern
+          Left err -> fail $ "Invalid glob pattern: " ++ err
+      ["LogNameRegex"] -> do
+        regexStr <- o .: "LogNameRegex"
+        case runIdentity . runFailT . makeRegexM @Regex @_ @_ @_ @(FailT String Identity) $ regexStr of
+          Right regex -> pure $ LogNameRegex (regexStr, regex)
+          Left err -> fail $ "Invalid regex pattern: " ++ err
+      _ -> fail "Invalid LogGroupsArg"
+
+instance ToJSON TimeRange where
+  toJSON (TimeRangeAbsolute start end) = object
+    [ "TimeRangeAbsolute" .= object
+        [ "start" .= start
+        , "end" .= end
+        ]
+    ]
+  toJSON (TimeRangeRelative diff) = object
+    [ "TimeRangeRelative" .= show diff
+    ]
+
+instance FromJSON TimeRange where
+  parseJSON = withObject "TimeRange" $ \o -> do
+    let keys = KeyMap.keys o
+    case keys of
+      ["TimeRangeAbsolute"] -> do
+        absObj <- o .: "TimeRangeAbsolute"
+        TimeRangeAbsolute <$> absObj .: "start" <*> absObj .: "end"
+      ["TimeRangeRelative"] -> do
+        diffStr <- o .: "TimeRangeRelative"
+        case formatParseM iso8601Format diffStr of
+          Just diff -> pure $ TimeRangeRelative diff
+          Nothing -> fail "Invalid ISO8601 duration"
+      _ -> fail "Invalid TimeRange"
+
+instance ToJSON Limit where
+  toJSON (ExplicitLimit n) = object ["ExplicitLimit" .= n]
+  toJSON MaxLimit = object ["MaxLimit" .= True]
+
+instance FromJSON Limit where
+  parseJSON = withObject "Limit" $ \o -> do
+    let keys = KeyMap.keys o
+    case keys of
+      ["ExplicitLimit"] -> ExplicitLimit <$> o .: "ExplicitLimit"
+      ["MaxLimit"] -> pure MaxLimit
+      _ -> fail "Invalid Limit"
+
+-- JSON instances for history types
+instance ToJSON ExecutionStatus where
+  toJSON Success = "Success"
+  toJSON Failed = "Failed"
+  toJSON DryRun = "DryRun"
+
+instance FromJSON ExecutionStatus where
+  parseJSON = \case
+    "Success" -> pure Success
+    "Failed" -> pure Failed
+    "DryRun" -> pure DryRun
+    _ -> fail "Invalid ExecutionStatus"
+
+instance ToJSON HistoryEntry where
+  toJSON entry = object
+    [ "historyId" .= _historyId entry
+    , "timestamp" .= _historyTimestamp entry
+    , "query" .= _historyQuery entry
+    , "logGroups" .= _historyLogGroups entry
+    , "timeRange" .= _historyTimeRange entry
+    , "limit" .= _historyLimit entry
+    , "queryLibrary" .= _historyQueryLibrary entry
+    , "executionTime" .= _historyExecutionTime entry
+    , "status" .= _historyStatus entry
+    ]
+
+instance FromJSON HistoryEntry where
+  parseJSON = withObject "HistoryEntry" $ \o -> HistoryEntry
+    <$> o .: "historyId"
+    <*> o .: "timestamp"
+    <*> o .: "query"
+    <*> o .: "logGroups"
+    <*> o .: "timeRange"
+    <*> o .: "limit"
+    <*> o .: "queryLibrary"
+    <*> o .: "executionTime" 
+    <*> o .: "status"
 
 -- Generate lenses for all data types
 makeLenses ''RunArgs
 makeLenses ''LibraryArgs
 makeLenses ''QueryShowArgs
+makeLenses ''HistoryEntry
+makeLenses ''HistoryArgs
 makeLenses ''AppArgs
