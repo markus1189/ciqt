@@ -29,7 +29,7 @@ library
       Ciqt.Utils
   hs-source-dirs:
       src
-  ghc-options: -Wall -fdefer-type-errors
+  ghc-options: -Wall
   build-depends:
       base
     , aeson
@@ -73,7 +73,7 @@ library
 
 executable ciqt
   main-is: src/Main.hs
-  ghc-options: -Wall -fdefer-type-errors
+  ghc-options: -Wall
   build-depends:
       base
     , ciqt
@@ -83,7 +83,7 @@ test-suite ciqt-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   hs-source-dirs: test
-  ghc-options: -Wall -fdefer-type-errors
+  ghc-options: -Wall
   build-depends:
       base
     , ciqt
