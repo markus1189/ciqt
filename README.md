@@ -456,7 +456,7 @@ nix develop --command cabal test
 # Run tests with verbose output
 nix develop --command cabal test --test-show-details=streaming
 
-# Run specific test pattern  
+# Run specific test pattern
 nix develop --command cabal test --test-options="-p expandTilde"
 ```
 
@@ -466,21 +466,15 @@ nix develop --command cabal test --test-options="-p expandTilde"
 - `expandTilde utility` - Tests path expansion functionality
 - `parseNestedJson utility` - Tests JSON parsing with nested structures
 
-**Golden Tests (3 tests):**
-- `main-help-output` - Validates `ciqt --help` output consistency
-- `run-help-output` - Validates `ciqt run --help` output consistency  
-- `library-help-output` - Validates `ciqt library --help` output consistency
-
 #### Test Framework Features
 
-- **Golden Tests**: Automatically detect CLI help text changes and regressions
 - **Fast Execution**: Tests complete in ~0.5 seconds using `cabal run`
 - **Tasty Integration**: Professional test framework with parallel execution
 - **CI Ready**: Tests can be easily integrated into continuous integration
 
 #### Updating Golden Files
 
-When CLI help output intentionally changes, update golden files:
+When something intentionally changes, update golden files:
 
 ```bash
 # Accept new golden file outputs
