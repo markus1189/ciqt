@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>A professional-grade command-line utility for executing and managing CloudWatch Insights queries</strong>
+  <strong>A command-line utility for executing and managing CloudWatch Insights queries</strong>
 </p>
 
 <p align="center">
@@ -21,14 +21,14 @@
 
 ## Overview
 
-CIQT provides enterprise-ready tooling for CloudWatch Logs analysis with sophisticated query management, execution history tracking, and seamless AWS integration. Built with Haskell for reliability and performance, it features a functional architecture with comprehensive resource management and type safety.
+CIQT provides sophisticated tooling for CloudWatch Logs analysis with comprehensive query management, execution history tracking, and seamless AWS integration. Built with Haskell for reliability and performance, it features a functional architecture with comprehensive resource management and type safety.
 
 ### Key Capabilities
 
 - **Advanced Query Execution**: Multiple query sources with flexible log group selection
 - **Comprehensive History Tracking**: Automatic recording with SHA256-based indexing
 - **Dual Library System**: Local and AWS CloudWatch Logs Insights integration
-- **Enterprise Integration**: JSON output, dry-run validation, and robust error handling
+- **Tool Integration**: JSON output, dry-run validation, and robust error handling
 - **High Performance**: Streaming results, memory-conscious design, optimized AWS API usage
 
 ## Installation
@@ -60,7 +60,7 @@ nix build
 
 - **Command-Line Query Execution**: Direct CloudWatch Insights query execution with comprehensive parameter control
 - **Modular Command Structure**: Organized functionality through `run`, `library`, `query`, and `history` subcommands
-- **Enterprise Integration**: JSON output format, dry-run validation, and robust error handling
+- **Tool Integration**: JSON output format, dry-run validation, and robust error handling
 
 ### Query History Management
 
@@ -440,7 +440,7 @@ ciqt library list
 
 **Build & Deployment**
 - **Nix Flakes**: Reproducible builds and hermetic development environments
-- **Cabal Integration**: Professional package management with dependency resolution
+- **Cabal Integration**: Modern package management with dependency resolution
 - **Cross-Platform**: Linux, macOS, and NixOS support
 
 **AWS Integration**
@@ -467,7 +467,7 @@ ciqt library list
 
 ## Performance & Scalability
 
-### Enterprise-Scale Considerations
+### Large-Scale Considerations
 
 **Log Group Discovery**
 - **Direct Selection**: Fastest performance using specific log group names (`--log-groups`)
@@ -595,7 +595,7 @@ nix develop --command cabal test --test-options="-p expandTilde"
 #### Test Framework Features
 
 - **Fast Execution**: Tests complete in ~0.5 seconds using `cabal run`
-- **Tasty Integration**: Professional test framework with parallel execution
+- **Tasty Integration**: Modern test framework with parallel execution
 - **CI Ready**: Tests can be easily integrated into continuous integration
 
 #### Updating Golden Files
@@ -671,6 +671,6 @@ nix --version
 ---
 
 <p align="center">
-  <strong>CIQT - Professional CloudWatch Insights Query Management</strong><br/>
+  <strong>CIQT - CloudWatch Insights Query Management</strong><br/>
   Built with ❤️ using Haskell and Nix
 </p>
