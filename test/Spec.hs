@@ -5,19 +5,16 @@ module Main (main) where
 
 import Test.Tasty
 import Test.Tasty.HUnit
-import Test.QuickCheck
-import Test.Tasty.QuickCheck
 import Ciqt.Utils (expandTilde, parseNestedJson)
 import Ciqt.History (generateHistoryId, findHistoryEntry)
-import Ciqt.Types (HistoryEntry(..), ExecutionStatus(..), LogGroupsArg(..), TimeRange(..), Limit(..), RunArgs(..), QueryArg(..))
+import Ciqt.Types (HistoryEntry(..), LogGroupsArg(..), TimeRange(..), Limit(..), RunArgs(..), QueryArg(..))
 import qualified Ciqt.Types as CT
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as LBS
-import Data.Time (UTCTime, getCurrentTime, CalendarDiffTime(..))
-import Data.Text (Text)
+import Data.Time (getCurrentTime, CalendarDiffTime(..))
 import Data.Text qualified as T
 import Data.List.NonEmpty qualified as NE
-import System.Directory (createDirectoryIfMissing, removeDirectoryRecursive, doesDirectoryExist)
+import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 
@@ -49,10 +46,8 @@ unitTests = testGroup "Unit Tests"
 historyTests :: TestTree
 historyTests = testGroup "History Tests"
   [ testCase "hash generation consistency" $ do
-      let query1 = "fields @timestamp | limit 10"
-          logGroups1 = CommaLogGroups (NE.fromList ["group1", "group2"])
+      let logGroups1 = CommaLogGroups (NE.fromList ["group1", "group2"])
           timeRange1 = TimeRangeRelative (CalendarDiffTime 0 3600)
-          limit1 = Just (ExplicitLimit 10)
       
       let dummyRunArgs = RunArgs (QueryString "test") Nothing Nothing Nothing False Nothing
       now <- getCurrentTime
@@ -63,12 +58,8 @@ historyTests = testGroup "History Tests"
       T.length hash1 @?= 8
       
   , testCase "hash uniqueness for different inputs" $ do
-      let query1 = "fields @timestamp | limit 10"
-          query2 = "fields @timestamp | limit 20"
-          logGroups = CommaLogGroups (NE.fromList ["group1"])
+      let logGroups = CommaLogGroups (NE.fromList ["group1"])
           timeRange = TimeRangeRelative (CalendarDiffTime 0 3600)
-          limit1 = Just (ExplicitLimit 10)
-          limit2 = Just (ExplicitLimit 20)
       
       let dummyRunArgs1 = RunArgs (QueryString "test1") Nothing Nothing Nothing False Nothing
           dummyRunArgs2 = RunArgs (QueryString "test2") Nothing Nothing Nothing False Nothing
@@ -105,29 +96,12 @@ historyTests = testGroup "History Tests"
         -- Test partial hash matching
         result1 <- findHistoryEntry (Just historyDir) "a1b2"
         case result1 of
-          Just entry -> _historyId entry @?= T.pack fullHash
+          Just found -> _historyId found @?= T.pack fullHash
           Nothing -> assertFailure "Expected to find history entry"
         
         result2 <- findHistoryEntry (Just historyDir) "xyz"
         result2 @?= Nothing
         
-  , testCase "directory operations" $ do
-      withSystemTempDirectory "ciqt-test" $ \tempDir -> do
-        let historyDir = tempDir </> "history"
-        
-        -- Directory should not exist initially
-        exists1 <- doesDirectoryExist historyDir
-        exists1 @?= False
-        
-        -- Create directory
-        createDirectoryIfMissing True historyDir
-        exists2 <- doesDirectoryExist historyDir
-        exists2 @?= True
-        
-        -- Cleanup
-        removeDirectoryRecursive historyDir
-        exists3 <- doesDirectoryExist historyDir
-        exists3 @?= False
   ]
 
 propertyTests :: TestTree

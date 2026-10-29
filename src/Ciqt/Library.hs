@@ -11,15 +11,15 @@ module Ciqt.Library
   )
 where
 
-import Ciqt.AWS (getAWSQueryById, discoverAwsEnv, fastLoggerToAwsLogger)
+import Ciqt.AWS (getAWSQueryById, discoverAwsEnv)
 import Ciqt.Types (QueryArg (..))
 import Ciqt.Utils (expandTilde, findQueries)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TIO
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, removeFile)
-import System.FilePath (dropExtension, makeRelative, takeDirectory, (</>))
-import System.Log.FastLogger (FastLogger, LogType' (LogStderr), defaultBufSize, withFastLogger)
+import System.FilePath (makeRelative, takeDirectory, (</>))
+import System.Log.FastLogger (LogType' (LogStderr), defaultBufSize, withFastLogger)
 
 -- | Calculate query content from different sources
 calculateQueryFromArg :: QueryArg -> Maybe FilePath -> IO Text

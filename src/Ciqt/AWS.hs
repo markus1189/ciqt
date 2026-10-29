@@ -15,8 +15,6 @@ module Ciqt.AWS
     listAWSQueries,
     describeAllAWSQueries,
     getAWSQueryById,
-    downloadAWSQuery,
-    uploadLocalQuery,
     deleteAWSQuery,
     syncQueries,
   )
@@ -34,7 +32,6 @@ import Amazonka.CloudWatchLogs.Lens
     describeQueryDefinitionsResponse_queryDefinitions,
     describeQueryDefinitions_nextToken,
     logGroup_logGroupName,
-    putQueryDefinitionResponse_queryDefinitionId,
     queryDefinition_logGroupNames,
     queryDefinition_name,
     queryDefinition_queryDefinitionId,
@@ -42,25 +39,24 @@ import Amazonka.CloudWatchLogs.Lens
   )
 import Amazonka.CloudWatchLogs.Types (QueryDefinition)
 import Amazonka.Prelude (mapMaybe)
-import Ciqt.Types (LogGroupsArg (..), QueryArg (..))
+import Ciqt.Types (LogGroupsArg (..))
+import Ciqt.Utils (expandTilde, findQueries)
 import Control.Lens (view, (.~), (?~), (^.), (&))
 import Control.Monad (unless)
 import Control.Monad.Catch (MonadCatch)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Resource (MonadResource)
-import Data.Foldable (for_)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TIO
-import System.Directory (doesDirectoryExist, getHomeDirectory, listDirectory)
-import System.FilePath (takeExtension, dropExtension, makeRelative, (</>))
+import System.Directory (doesDirectoryExist)
 import System.FilePath.Glob (Pattern)
 import System.FilePath.Glob qualified as Glob
 import System.Log.FastLogger (FastLogger, ToLogStr (toLogStr))
-import Text.Regex.PCRE (Regex, RegexContext (match))
+import Text.Regex.PCRE (RegexContext (match))
 
 -- | Convert FastLogger to AWS Logger format
 fastLoggerToAwsLogger :: FastLogger -> AWS.Logger
@@ -156,18 +152,6 @@ getAWSQueryById env queryId = AWS.runResourceT $ do
       Nothing -> liftIO $ fail $ "AWS query has no query string: " ++ Text.unpack queryId
       Just queryStr -> pure queryStr
 
--- | Download AWS query to local library
--- Note: Implementation moved to main module to avoid circular dependency
-downloadAWSQuery :: AWS.Env -> Maybe FilePath -> Text -> Text -> IO ()
-downloadAWSQuery env queryLibPath queryId localName = do
-  TIO.putStrLn $ "Download functionality temporarily disabled - use ciqt main module"
-
--- | Upload local query to AWS
--- Note: Implementation moved to main module to avoid circular dependency
-uploadLocalQuery :: AWS.Env -> Maybe FilePath -> Text -> IO ()
-uploadLocalQuery env queryLibPath localName = do
-  TIO.putStrLn $ "Upload functionality temporarily disabled - use ciqt main module"
-
 -- | Delete AWS saved query
 deleteAWSQuery :: AWS.Env -> Text -> IO ()
 deleteAWSQuery env queryId = AWS.runResourceT $ do
@@ -209,33 +193,3 @@ syncQueries env queryLibPath = do
           TIO.putStrLn $ "  " <> queryId <> ": " <> name
       )
       awsQueries
-
--- Helper functions - TODO: move to Ciqt.Utils
-expandTilde :: FilePath -> IO FilePath
-expandTilde path = case path of
-  '~' : '/' : rest -> do
-    home <- getHomeDirectory
-    return $ home </> rest
-  _ -> return path
-
-findQueries :: FilePath -> FilePath -> IO [Text]
-findQueries basePath currentPath = do
-  contents <- listDirectory currentPath
-  (dirs, files) <- partitionM (\name -> doesDirectoryExist (currentPath </> name)) contents
-  let queryFiles = filter isQueryFile files
-      relativePaths = map (Text.pack . makeRelative basePath . (currentPath </>)) queryFiles
-      relativePathsWithoutExt = map (Text.pack . dropExtension . Text.unpack) relativePaths
-
-  subQueries <- concat <$> mapM (findQueries basePath . (currentPath </>)) dirs
-  pure $ relativePathsWithoutExt ++ subQueries
-  where
-    isQueryFile name = takeExtension name == ".query"
-
-partitionM :: (a -> IO Bool) -> [a] -> IO ([a], [a])
-partitionM _ [] = pure ([], [])
-partitionM f (x : xs) = do
-  result <- f x
-  (trues, falses) <- partitionM f xs
-  if result
-    then pure (x : trues, falses)
-    else pure (trues, x : falses)

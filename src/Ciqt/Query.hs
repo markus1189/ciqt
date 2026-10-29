@@ -17,7 +17,7 @@ where
 import Amazonka qualified as AWS
 import Amazonka.CloudWatchLogs (QueryStatus (..))
 import Amazonka.CloudWatchLogs qualified as Logs
-import Amazonka.CloudWatchLogs.GetQueryResults (getQueryResultsResponse_results, getQueryResultsResponse_statistics)
+import Amazonka.CloudWatchLogs.GetQueryResults (getQueryResultsResponse_statistics)
 import Amazonka.CloudWatchLogs.Lens (getQueryResultsResponse_status, startQueryResponse_queryId, startQuery_limit)
 import Amazonka.CloudWatchLogs.StartQuery (startQuery_logGroupNames)
 import Amazonka.CloudWatchLogs.StopQuery (newStopQuery)
@@ -30,13 +30,11 @@ import Control.Monad.Catch (bracket)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Resource (MonadResource, ResourceT)
 import Control.Retry (constantDelay, limitRetriesByCumulativeDelay, retrying)
-import Data.Foldable (for_)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Data.Text.IO qualified as TIO
-import Data.Time (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime, addUTCTime, formatTime, zonedTimeToUTC)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, formatTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Traversable (for)
