@@ -15,7 +15,7 @@ import Ciqt.Library (calculateQueryFromArg, listQueries, saveQuery, deleteQuery)
 import Ciqt.Query (buildQuery, executeQuery, calculateQueryStartEnd, calculateLimitFromRunArgs, calculateQueryFromRunArgs)
 import Ciqt.Types
 import Ciqt.Utils (parseNestedJson, resultFieldsToJson, printPreFlightInfo, formatQueryStats)
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, throwIO, try)
 import Control.Lens ((&), (^.), (.~), (%~))
 import Control.Applicative ((<|>))
 import Control.Monad (unless)
@@ -90,7 +90,8 @@ handleRunCommand fastLogger runArgs globalLibPath globalHistoryDir = do
 
   -- Generate history entry
   let entryHistoryId = generateHistoryId runArgs now logGroupsArg timeRange
-      status = if runArgs ^. runArgsDryRun then DryRun else Success
+      -- Failed until proven otherwise: a run killed mid-query must not be recorded as a success
+      status = if runArgs ^. runArgsDryRun then DryRun else Failed
       limitForHistory = runArgs ^. runArgsLimit  -- Use original Limit type
 
   -- Record initial history entry
@@ -122,6 +123,7 @@ handleRunCommand fastLogger runArgs globalLibPath globalHistoryDir = do
     
     -- Update history entry with execution results
     updateHistoryEntry globalHistoryDir entryHistoryId (Just executionTime) finalStatus
+    either throwIO pure result
 
 -- | Handle library command operations
 handleLibraryCommand :: LibraryArgs -> Maybe FilePath -> IO ()
