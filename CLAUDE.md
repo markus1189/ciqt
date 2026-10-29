@@ -201,7 +201,7 @@ The tool supports a comprehensive query library system:
 #### AWS Saved Queries
 - Integration with AWS CloudWatch Logs Insights saved queries
 - Commands: `ciqt library aws-list|aws-download|aws-upload|aws-delete`
-- Bidirectional sync capabilities: `ciqt library sync`
+- `ciqt library sync` only lists local and AWS queries side by side; it copies nothing
 - Query execution directly from AWS: `--query-aws-id <query-id>`
 
 #### Library Operations

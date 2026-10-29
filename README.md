@@ -75,7 +75,7 @@ nix build
 - **Dual Library Architecture**: 
   - Local file-based query management for personal collections
   - Native AWS CloudWatch Logs Insights saved queries integration
-- **Synchronization Capabilities**: Bidirectional sync between local and AWS query libraries
+- **Library Comparison**: `library sync` lists local and AWS queries side by side (it does not copy anything)
 - **Hierarchical Organization**: Directory-based query organization with automatic management
 
 ### Log Group Selection
